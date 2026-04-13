@@ -265,7 +265,7 @@ def _sidebar():
         if uploaded:
             _handle_upload(uploaded, s)
 
-        if s.project_loaded:
+        if s.project_loaded and s.project_map:
             pm = s.project_map
             stats = pm.get("stats", {})
             c1, c2 = st.columns(2)
@@ -314,7 +314,7 @@ def _handle_upload(uploaded, s: EtherSession):
     s.active_file = None
     st.sidebar.success(f"✓ {msg}")
     s.add_turn("assistant", f"Project loaded: {pm['stats']['script_count']} scripts, {pm['stats']['scene_count']} scenes.")
-    st.rerun()
+    # Don't rerun here - let the normal render cycle pick up the state changes
 
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
@@ -376,7 +376,7 @@ def _tab_chat():
 
         # Context selection
         context = ""
-        if s.project_loaded:
+        if s.project_loaded and s.project_map:
             context = select_context(task, s.project_map, s.file_contents)
             mem = s.get_memory_context(task)
             if mem:
@@ -518,7 +518,7 @@ def _tab_apply():
 
 def _tab_files():
     s = _session()
-    if not s.project_loaded:
+    if not s.project_loaded or not s.project_files:
         st.info("Load a project to browse files.")
         return
 
@@ -529,7 +529,7 @@ def _tab_files():
             "file",
             options=s.project_files,
             label_visibility="collapsed",
-            index=s.project_files.index(s.active_file) if s.active_file in s.project_files else 0
+            index=s.project_files.index(s.active_file) if s.active_file and s.active_file in s.project_files else 0
         )
         s.active_file = selected
 
@@ -544,7 +544,7 @@ def _tab_files():
 
 def _tab_map():
     s = _session()
-    if not s.project_loaded:
+    if not s.project_loaded or not s.project_map:
         st.info("Load a project to view the project map.")
         return
 
