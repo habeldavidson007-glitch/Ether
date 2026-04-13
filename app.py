@@ -245,14 +245,16 @@ def _sidebar():
         st.divider()
 
         # API Key
+        existing_key = st.session_state.get("api_key", "")
         api_key = st.text_input(
             "OpenRouter API Key",
             type="password",
-            value=st.session_state.get("api_key", ""),
+            value=existing_key,
             placeholder="sk-or-...",
-            help="Free tier at openrouter.ai"
+            help="Free tier at openrouter.ai",
+            key="api_key_input"
         )
-        if api_key:
+        if api_key and api_key != existing_key:
             st.session_state["api_key"] = api_key
 
         st.divider()
@@ -321,7 +323,6 @@ def _handle_upload(uploaded, s: EtherSession):
 
 def _tab_chat():
     s = _session()
-    api_key = st.session_state.get("api_key", "")
 
     # Render history
     for turn in s.history:
@@ -357,6 +358,8 @@ def _tab_chat():
         if not user_input.strip():
             st.warning("Enter a message.")
             return
+        # Get API key at submission time, not render time
+        api_key = st.session_state.get("api_key", "")
         if not api_key:
             st.error("Add your OpenRouter API key in the sidebar.")
             return
