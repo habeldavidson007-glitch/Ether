@@ -232,6 +232,11 @@ def _pending() -> list:
     return st.session_state["pending_changes"]
 
 
+def _get_api_key() -> str:
+    """Safely retrieve API key from session state."""
+    return st.session_state.get("api_key", "")
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 def _sidebar():
@@ -244,18 +249,24 @@ def _sidebar():
         )
         st.divider()
 
-        # API Key
-        existing_key = st.session_state.get("api_key", "")
+        # API Key - use a unique key to avoid state conflicts
         api_key = st.text_input(
             "OpenRouter API Key",
             type="password",
-            value=existing_key,
+            value="",
             placeholder="sk-or-...",
             help="Free tier at openrouter.ai",
-            key="api_key_input"
+            key="sidebar_api_key"
         )
-        if api_key and api_key != existing_key:
+        # Update session state if user entered a key
+        if api_key:
             st.session_state["api_key"] = api_key
+        
+        # Show status indicator
+        if st.session_state.get("api_key", ""):
+            st.success("✓ API key set")
+        else:
+            st.warning("API key required")
 
         st.divider()
 
@@ -316,7 +327,8 @@ def _handle_upload(uploaded, s: EtherSession):
     s.active_file = None
     st.sidebar.success(f"✓ {msg}")
     s.add_turn("assistant", f"Project loaded: {pm['stats']['script_count']} scripts, {pm['stats']['scene_count']} scenes.")
-    # Don't rerun here - let the normal render cycle pick up the state changes
+    # Force a rerun to ensure the sidebar state is properly updated
+    st.rerun()
 
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
@@ -358,7 +370,8 @@ def _tab_chat():
         if not user_input.strip():
             st.warning("Enter a message.")
             return
-        # Get API key at submission time, not render time
+        
+        # Get API key at submission time from session state
         api_key = st.session_state.get("api_key", "")
         if not api_key:
             st.error("Add your OpenRouter API key in the sidebar.")
@@ -377,13 +390,15 @@ def _tab_chat():
         s.update_mode(intent)
         s.add_turn("user", task)
 
-        # Context selection
+        # Context selection - only if project is properly loaded
         context = ""
-        if s.project_loaded and s.project_map:
+        if s.project_loaded and s.project_map and s.file_contents:
             context = select_context(task, s.project_map, s.file_contents)
             mem = s.get_memory_context(task)
             if mem:
                 context = mem + "\n\n" + context
+        elif s.project_loaded:
+            st.warning("Project loaded but map is empty. Try re-uploading the ZIP file.")
 
         # Run
         log_placeholder = st.empty()
@@ -521,8 +536,12 @@ def _tab_apply():
 
 def _tab_files():
     s = _session()
-    if not s.project_loaded or not s.project_files:
+    if not s.project_loaded:
         st.info("Load a project to browse files.")
+        return
+    
+    if not s.project_files or not s.file_contents:
+        st.warning("Project file list is empty. Please re-upload your ZIP file.")
         return
 
     c1, c2 = st.columns([1, 2])
@@ -547,8 +566,12 @@ def _tab_files():
 
 def _tab_map():
     s = _session()
-    if not s.project_loaded or not s.project_map:
+    if not s.project_loaded:
         st.info("Load a project to view the project map.")
+        return
+    
+    if not s.project_map or not s.file_contents:
+        st.warning("Project data is incomplete. Please re-upload your ZIP file.")
         return
 
     pm = s.project_map
