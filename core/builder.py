@@ -25,11 +25,26 @@ MODEL_PRIMARY  = "minimax/minimax-m2.5:free"
 MODEL_FALLBACK = "nousresearch/hermes-3-llama-3.1-405b:free"
 
 
-def _call(messages: List[Dict], api_key: str, model: str = "nvidia/nemotron-3-super-120b-a12b:free",
-          max_tokens: int = 2000) -> str:
-    """Single API call. Returns response text or raises."""
+def _call(messages: List[Dict], api_key: str, model: str = None,
+          max_tokens: int = 800) -> str:
+    """Single API call with fallback. Returns response text or safe fallback."""
+    
+    # Validate API key
     if not api_key or not api_key.startswith("sk-"):
         raise RuntimeError("Invalid OpenRouter API key.")
+    
+    # Cap tokens to prevent issues
+    max_tokens = min(max_tokens, 800)
+    
+    # Ensure messages not empty
+    if not messages:
+        return "⚠ No input provided."
+    
+    # Model fallback system (free tier only)
+    models = [
+        "nousresearch/hermes-3-llama-3.1-405b:free",
+        "minimax/minimax-m2.5:free"
+    ]
     
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -37,24 +52,48 @@ def _call(messages: List[Dict], api_key: str, model: str = "nvidia/nemotron-3-su
         "HTTP-Referer": "http://localhost:8501",
         "X-Title": "Ether"
     }
-    payload = {
-        "model": "nvidia/nemotron-3-super",
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-    }
-    try:
-        r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
-        if not r2.ok:
-            raise RuntimeError(
-                f"OpenRouter API Error {r2.status_code}: {r2.text[:300]}"
-            )
-        data = r2.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except requests.HTTPError as e:
-        raise RuntimeError(f"API error {r2.status_code}: {r2.text[:300]}") from e
-    except Exception as e:
-        raise RuntimeError(f"Request failed: {e}") from e
+    
+    for model_name in models:
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        }
+        
+        try:
+            r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
+            
+            if not r2.ok:
+                print(f"[MODEL FAIL] {model_name}: {r2.text[:300]}")
+                continue
+            
+            data = r2.json()
+            
+            # Validate response structure
+            if "choices" not in data or len(data["choices"]) == 0:
+                print(f"[MODEL FAIL] {model_name}: No choices in response")
+                continue
+            
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                print(f"[MODEL FAIL] {model_name}: Empty content")
+                continue
+                
+            return content.strip()
+            
+        except requests.exceptions.Timeout:
+            print(f"[MODEL FAIL] {model_name}: Timeout")
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"[MODEL FAIL] {model_name}: {e}")
+            continue
+        except Exception as e:
+            print(f"[MODEL FAIL] {model_name}: {e}")
+            continue
+    
+    # Final fallback if ALL models fail
+    return "⚠ Model unavailable. Check API or try again."
 
 
 def _safe_json(text: str) -> Optional[Dict]:
