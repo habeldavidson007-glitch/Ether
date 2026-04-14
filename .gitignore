@@ -1,10 +1,56 @@
-```gitignore
-# Python cache files
+```
+# Temporary files
+*.tmp
+*.temp
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Python specific
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
+env/
+venv/
+.venv/
+.venv*/
+.ENV/
+.ENV*/
+.egg-info/
+.eggs/
+.coverage
+.coverage.*
+.nox/
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
 
-# Original rule preserved
-*.log
+# Build artifacts
+build/
+dist/
+*.egg
+*.whl
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Project specific
+workspace/memory.json
 ```
