@@ -25,33 +25,34 @@ MODEL_PRIMARY  = "minimax/minimax-m2.5:free"
 MODEL_FALLBACK = "nousresearch/hermes-3-llama-3.1-405b:free"
 
 
-def _call(messages: List[Dict], api_key: str, model: str = MODEL_PRIMARY,
+def _call(messages: List[Dict], api_key: str, model: str = "nvidia/nemotron-3-super",
           max_tokens: int = 2000) -> str:
     """Single API call. Returns response text or raises."""
+    if not api_key or not api_key.startswith("sk-"):
+        raise RuntimeError("Invalid OpenRouter API key.")
+    
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://ether-godot.local",
+        "HTTP-Referer": "http://localhost:8501",
+        "X-Title": "Ether"
     }
     payload = {
-        "model": model,
+        "model": "nvidia/nemotron-3-super",
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.3,
     }
     try:
-        r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
-        r.raise_for_status()
-        data = r.json()
+        r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
+        if not r2.ok:
+            raise RuntimeError(
+                f"OpenRouter API Error {r2.status_code}: {r2.text[:300]}"
+            )
+        data = r2.json()
         return data["choices"][0]["message"]["content"].strip()
     except requests.HTTPError as e:
-        if r.status_code in (429, 503) and model == MODEL_PRIMARY:
-            # Try fallback
-            payload["model"] = MODEL_FALLBACK
-            r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
-            r2.raise_for_status()
-            return r2.json()["choices"][0]["message"]["content"].strip()
-        raise RuntimeError(f"API error {r.status_code}: {r.text[:200]}") from e
+        raise RuntimeError(f"API error {r2.status_code}: {r2.text[:300]}") from e
     except Exception as e:
         raise RuntimeError(f"Request failed: {e}") from e
 
