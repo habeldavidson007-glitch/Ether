@@ -400,6 +400,20 @@ def _tab_chat():
             api_key = _get_api_key()
         except RuntimeError as e:
             st.error(str(e))
+
+            # Fallback API input (when sidebar is hidden)
+            st.markdown("### 🔑 Enter API Key")
+            fallback_key = st.text_input(
+                "OpenRouter API Key",
+                type="password",
+                key="fallback_api_key"
+            )
+
+            if fallback_key:
+                st.session_state["api_key"] = fallback_key
+                st.success("API key set. You can continue.")
+                st.rerun()
+
             return
 
         task = user_input.strip()
