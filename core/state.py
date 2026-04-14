@@ -1,5 +1,5 @@
 """
-Ether State — Single source of truth for session identity.
+Ether State - Single source of truth for session identity.
 
 Replaces: identity_engine, cognitive_controller, memory_system, todo_manager,
           strategy_engine, intent_engine (all collapsed into one lean module).
