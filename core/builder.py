@@ -25,8 +25,7 @@ MODEL_PRIMARY  = "minimax/minimax-m2.5:free"
 MODEL_FALLBACK = "nousresearch/hermes-3-llama-3.1-405b:free"
 
 
-def _call(messages: List[Dict], api_key: str, model: str = None,
-          max_tokens: int = 800) -> str:
+def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
     """Single API call with fallback. Returns response text or safe fallback."""
     
     # Validate API key
@@ -40,7 +39,7 @@ def _call(messages: List[Dict], api_key: str, model: str = None,
     if not messages:
         return "⚠ No input provided."
     
-    # Model fallback system (free tier only)
+    # Model fallback system (free tier only) - HARD CODED, NO EXTERNAL OVERRIDE
     models = [
         "nousresearch/hermes-3-llama-3.1-405b:free",
         "minimax/minimax-m2.5:free"
@@ -54,6 +53,13 @@ def _call(messages: List[Dict], api_key: str, model: str = None,
     }
     
     for model_name in models:
+        # Hard guard: skip any disallowed models (should never happen now)
+        if "nemotron" in model_name.lower() or "nvidia" in model_name.lower():
+            print(f"[MODEL BLOCKED] {model_name}: Not allowed")
+            continue
+        
+        print(f"[MODEL USED] {model_name}")
+        
         payload = {
             "model": model_name,
             "messages": messages,
