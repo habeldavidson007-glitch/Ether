@@ -265,11 +265,11 @@ def _handle_upload(uploaded, s: EtherSession):
     data = uploaded.read()
     if not data:
         st.error("Empty ZIP.")
-        return
+        return False
     ok, msg, file_contents = extract_zip(data)
     if not ok:
         st.error(msg)
-        return
+        return False
     pm = build_project_map(file_contents)
     s.project_loaded = True
     s.project_files = list(file_contents.keys())
@@ -278,8 +278,12 @@ def _handle_upload(uploaded, s: EtherSession):
     s.active_file = None
     st.success(f"✓ {msg}")
     s.add_turn("assistant", f"Project loaded: {pm['stats']['script_count']} scripts, {pm['stats']['scene_count']} scenes.")
-    # Force a rerun to ensure the sidebar state is properly updated
-    st.rerun()
+    return True
+
+
+def _get_uploaded_file_key(uploaded) -> str:
+    """Generate a unique key for an uploaded file based on name and size."""
+    return f"{uploaded.name}:{uploaded.size}"
 
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
@@ -340,10 +344,17 @@ def _tab_chat():
         )
 
         if uploaded:
-            _handle_upload(uploaded, s)
-            st.session_state["show_upload"] = False
-            st.success("Project uploaded.")
-            st.rerun()
+            current_file_key = _get_uploaded_file_key(uploaded)
+            last_uploaded_key = st.session_state.get("last_uploaded_file_key")
+
+            # Only process if this is a NEW file (not already processed)
+            if last_uploaded_key != current_file_key:
+                success = _handle_upload(uploaded, s)
+                if success:
+                    st.session_state["last_uploaded_file_key"] = current_file_key
+                    st.session_state["show_upload"] = False
+                    st.rerun()
+            # If file key matches, skip processing - prevents infinite loop
 
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_area(
