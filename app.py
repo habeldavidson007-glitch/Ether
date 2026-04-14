@@ -29,7 +29,7 @@ st.set_page_config(
     page_title="Ether",
     page_icon="◈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Styles ─────────────────────────────────────────────────────────────────────
@@ -62,10 +62,6 @@ html, body, [class*="css"] {
 .stApp { background: var(--bg) !important; }
 
 /* Sidebar */
-section[data-testid="stSidebar"] {
-    background: var(--surface) !important;
-    border-right: 1px solid var(--border) !important;
-}
 
 /* Input */
 .stTextInput > div > div > input,
@@ -261,87 +257,17 @@ def _get_api_key() -> str:
     raise RuntimeError("API key not found. Set it in sidebar or secrets.toml.")
 
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
 
-def _sidebar():
-    s = _session()
-    with st.sidebar:
-        st.markdown("### ◈ Ether")
-        st.markdown(
-            '<span class="badge badge-info">SMGA 3.0</span>',
-            unsafe_allow_html=True
-        )
-        st.divider()
-
-        # API Key - use a unique key to avoid state conflicts
-        api_key = st.text_input(
-            "OpenRouter API Key",
-            type="password",
-            value="",
-            placeholder="sk-or-...",
-            help="Free tier at openrouter.ai",
-            key="sidebar_api_key"
-        )
-        # Update session state if user entered a key
-        if api_key:
-            st.session_state["api_key"] = api_key
-        
-        # Show status indicator
-        if st.session_state.get("api_key", ""):
-            st.success("✓ API key set")
-        else:
-            st.warning("API key required")
-
-        st.divider()
-
-        # Project upload
-        st.markdown("**Project**")
-        uploaded = st.file_uploader(
-            "Upload ZIP", type=["zip"], label_visibility="collapsed"
-        )
-        if uploaded:
-            _handle_upload(uploaded, s)
-
-        if s.project_loaded and s.project_map:
-            pm = s.project_map
-            stats = pm.get("stats", {})
-            c1, c2 = st.columns(2)
-            c1.metric("Scripts", stats.get("script_count", 0))
-            c2.metric("Scenes", stats.get("scene_count", 0))
-
-            # Active file selector
-            if s.project_files:
-                active = st.selectbox(
-                    "Active file",
-                    options=["(none)"] + s.project_files,
-                    index=0 if not s.active_file else
-                          (s.project_files.index(s.active_file) + 1
-                           if s.active_file in s.project_files else 0)
-                )
-                s.active_file = None if active == "(none)" else active
-        else:
-            st.caption("No project loaded")
-
-        st.divider()
-
-        # Session info
-        st.markdown(f"**Mode** `{s.mode}`")
-        st.markdown(f"**Turns** `{len(s.history) // 2}`")
-
-        if st.button("Clear session", use_container_width=True):
-            st.session_state["ether"] = EtherSession()
-            st.session_state["pending_changes"] = []
-            st.rerun()
-
+# ── Upload Handler ─────────────────────────────────────────────────────────────
 
 def _handle_upload(uploaded, s: EtherSession):
     data = uploaded.read()
     if not data:
-        st.sidebar.error("Empty ZIP.")
+        st.error("Empty ZIP.")
         return
     ok, msg, file_contents = extract_zip(data)
     if not ok:
-        st.sidebar.error(msg)
+        st.error(msg)
         return
     pm = build_project_map(file_contents)
     s.project_loaded = True
@@ -349,7 +275,7 @@ def _handle_upload(uploaded, s: EtherSession):
     s.file_contents = file_contents
     s.project_map = pm
     s.active_file = None
-    st.sidebar.success(f"✓ {msg}")
+    st.success(f"✓ {msg}")
     s.add_turn("assistant", f"Project loaded: {pm['stats']['script_count']} scripts, {pm['stats']['scene_count']} scenes.")
     # Force a rerun to ensure the sidebar state is properly updated
     st.rerun()
@@ -359,6 +285,26 @@ def _handle_upload(uploaded, s: EtherSession):
 
 def _tab_chat():
     s = _session()
+
+    # ── API Key Gate ──
+    api_key = None
+    try:
+        api_key = _get_api_key()
+    except RuntimeError:
+        st.markdown("### 🔑 Enter OpenRouter API Key")
+
+        fallback_key = st.text_input(
+            "API Key",
+            type="password",
+            key="global_api_key"
+        )
+
+        if fallback_key:
+            st.session_state["api_key"] = fallback_key
+            st.success("API key saved.")
+            st.rerun()
+
+        st.stop()
 
     # Render history
     for turn in s.history:
@@ -409,31 +355,9 @@ def _tab_chat():
         submitted = c1.form_submit_button("Send ↵", type="primary", use_container_width=True)
         gen_btn   = c2.form_submit_button("Generate System", use_container_width=True)
         fix_btn   = c3.form_submit_button("Fix Errors", use_container_width=True)
-
     if submitted or gen_btn or fix_btn:
         if not user_input.strip():
             st.warning("Enter a message.")
-            return
-        
-        # Get API key at submission time from session state
-        try:
-            api_key = _get_api_key()
-        except RuntimeError as e:
-            st.error(str(e))
-
-            # Fallback API input (when sidebar is hidden)
-            st.markdown("### 🔑 Enter API Key")
-            fallback_key = st.text_input(
-                "OpenRouter API Key",
-                type="password",
-                key="fallback_api_key"
-            )
-
-            if fallback_key:
-                st.session_state["api_key"] = fallback_key
-                st.success("API key set. You can continue.")
-                st.rerun()
-
             return
 
         task = user_input.strip()
@@ -700,7 +624,6 @@ def _tab_memory():
 # ── Main ────────────────────────────────────────────────────────────────────────
 
 def main():
-    _sidebar()
 
     # Header
     st.markdown(
@@ -712,12 +635,9 @@ def main():
     )
     st.markdown("")
 
-    tabs = st.tabs(["CHAT", "APPLY", "FILES", "MAP", "MEMORY"])
+    tabs = st.tabs(["CHAT", "MAP"])
     with tabs[0]: _tab_chat()
-    with tabs[1]: _tab_apply()
-    with tabs[2]: _tab_files()
-    with tabs[3]: _tab_map()
-    with tabs[4]: _tab_memory()
+    with tabs[1]: _tab_map()
 
 
 if __name__ == "__main__":
