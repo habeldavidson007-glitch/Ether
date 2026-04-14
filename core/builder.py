@@ -245,7 +245,7 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str)
             f"Existing code:\n{context}"
         )}
     ]
-    raw = _call(messages, api_key, max_tokens=3000)
+    raw = _call(messages, api_key, max_tokens=1500)
     result = _safe_json(raw)
     if not result:
         # Wrap raw response as a single file change
