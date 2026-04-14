@@ -1,0 +1,11 @@
+[
+  {
+    "task": "test task",
+    "intent": "debug",
+    "success": true,
+    "tags": [
+      "tag1"
+    ],
+    "ts": "2026-04-14 16:09"
+  }
+]
