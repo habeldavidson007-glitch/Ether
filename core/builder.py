@@ -26,7 +26,7 @@ MODEL_FALLBACK = "nousresearch/hermes-3-llama-3.1-405b:free"
 
 
 def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
-    """Single API call with fallback. Returns response text or safe fallback."""
+    """Single API call. Returns response text or actual error message."""
     
     # Validate API key
     if not api_key or not api_key.startswith("sk-"):
@@ -39,11 +39,8 @@ def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
     if not messages:
         return "⚠ No input provided."
     
-    # Model fallback system (free tier only) - HARD CODED, NO EXTERNAL OVERRIDE
-    models = [
-        "nousresearch/hermes-3-llama-3.1-405b:free",
-        "minimax/minimax-m2.5:free"
-    ]
+    # Use primary model only - no fallback loop
+    model_name = MODEL_PRIMARY
     
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -52,54 +49,37 @@ def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
         "X-Title": "Ether"
     }
     
-    for model_name in models:
-        # Hard guard: skip any disallowed models (should never happen now)
-        if "nemotron" in model_name.lower() or "nvidia" in model_name.lower():
-            print(f"[MODEL BLOCKED] {model_name}: Not allowed")
-            continue
-        
-        print(f"[MODEL USED] {model_name}")
-        
-        payload = {
-            "model": model_name,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-        }
-        
-        try:
-            r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
-            
-            if not r2.ok:
-                print(f"[MODEL FAIL] {model_name}: {r2.text[:300]}")
-                continue
-            
-            data = r2.json()
-            
-            # Validate response structure
-            if "choices" not in data or len(data["choices"]) == 0:
-                print(f"[MODEL FAIL] {model_name}: No choices in response")
-                continue
-            
-            content = data["choices"][0]["message"]["content"]
-            if not content:
-                print(f"[MODEL FAIL] {model_name}: Empty content")
-                continue
-                
-            return content.strip()
-            
-        except requests.exceptions.Timeout:
-            print(f"[MODEL FAIL] {model_name}: Timeout")
-            continue
-        except requests.exceptions.RequestException as e:
-            print(f"[MODEL FAIL] {model_name}: {e}")
-            continue
-        except Exception as e:
-            print(f"[MODEL FAIL] {model_name}: {e}")
-            continue
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+    }
     
-    # Final fallback if ALL models fail
-    return "⚠ Model unavailable. Check API or try again."
+    try:
+        r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
+        
+        if not r2.ok:
+            return f"❌ API ERROR ({model_name}): {r2.text[:300]}"
+        
+        data = r2.json()
+        
+        # Validate response structure
+        if "choices" not in data or len(data["choices"]) == 0:
+            return f"❌ API ERROR ({model_name}): No choices in response"
+        
+        content = data["choices"][0]["message"]["content"]
+        if not content:
+            return f"❌ API ERROR ({model_name}): Empty content"
+            
+        return content.strip()
+        
+    except requests.exceptions.Timeout:
+        return f"❌ EXCEPTION ({model_name}): Request timeout"
+    except requests.exceptions.RequestException as e:
+        return f"❌ EXCEPTION ({model_name}): {str(e)}"
+    except Exception as e:
+        return f"❌ EXCEPTION ({model_name}): {str(e)}"
 
 
 def _safe_json(text: str) -> Optional[Dict]:
