@@ -1,43 +1,28 @@
-```
-# Python
-__pycache__/
+# Examples 1:
+(empty — output nothing)
+
+# Example 2 (Project with artifacts):
+# Compiled and build artifacts
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
+__pycache__/
+*.o
+*.obj
+dist/
+build/
+# Dependencies
 .venv/
-.ENV
-.env
-.env.*
-.env.local
-.python-version
-.pytest_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-
-# Logs
+venv/
+node_modules/
+# Logs and temp files
 *.log
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Editor files
+*.tmp
+*.swp
+# Environment
+.env
+.env.local
+.env.*
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Build artifacts
-build/
-dist/
-*.egg-info/
-```
+Final reminder: Output ONLY the .gitignore content. If nothing should be ignored, output NOTHING.
