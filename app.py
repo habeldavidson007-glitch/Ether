@@ -72,6 +72,8 @@ html, body, [class*="css"] {
     color: var(--text) !important;
     font-family: var(--mono) !important;
     border-radius: 4px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus {
@@ -144,6 +146,9 @@ code, pre {
     padding: 0.75rem 1rem;
     margin: 0.5rem 0;
     font-size: 0.88rem;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
 }
 .msg-ai {
     background: var(--surface);
@@ -153,6 +158,9 @@ code, pre {
     padding: 0.75rem 1rem;
     margin: 0.5rem 0;
     font-size: 0.88rem;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
 }
 .msg-system {
     background: transparent;
@@ -343,7 +351,7 @@ def _tab_chat():
             key="chat_upload"
         )
 
-        if uploaded:
+        if uploaded is not None:
             current_file_key = _get_uploaded_file_key(uploaded)
             last_uploaded_key = st.session_state.get("last_uploaded_file_key")
 
@@ -354,7 +362,9 @@ def _tab_chat():
                     st.session_state["last_uploaded_file_key"] = current_file_key
                     st.session_state["show_upload"] = False
                     st.rerun()
-            # If file key matches, skip processing - prevents infinite loop
+            else:
+                # File already processed - hide uploader and don't rerun
+                st.session_state["show_upload"] = False
 
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_area(

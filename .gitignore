@@ -1,1 +1,10 @@
-(empty)
+```gitignore
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Original rules preserved
+*.log
+```
