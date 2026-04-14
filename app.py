@@ -233,8 +233,32 @@ def _pending() -> list:
 
 
 def _get_api_key() -> str:
-    """Safely retrieve API key from session state."""
-    return st.session_state.get("api_key", "")
+    """
+    Resolve API key from:
+    1. Session state (primary)
+    2. Backward compatibility key
+    3. Streamlit secrets.toml
+    4. Environment variable
+    """
+
+    if "api_key" in st.session_state and st.session_state["api_key"]:
+        return st.session_state["api_key"]
+
+    if "sidebar_api_key" in st.session_state and st.session_state["sidebar_api_key"]:
+        return st.session_state["sidebar_api_key"]
+
+    try:
+        if "OPENROUTER_API_KEY" in st.secrets:
+            return st.secrets["OPENROUTER_API_KEY"]
+    except Exception:
+        pass
+
+    import os
+    env_key = os.getenv("OPENROUTER_API_KEY")
+    if env_key:
+        return env_key
+
+    raise RuntimeError("API key not found. Set it in sidebar or secrets.toml.")
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -372,9 +396,10 @@ def _tab_chat():
             return
         
         # Get API key at submission time from session state
-        api_key = st.session_state.get("api_key", "")
-        if not api_key:
-            st.error("Add your OpenRouter API key in the sidebar.")
+        try:
+            api_key = _get_api_key()
+        except RuntimeError as e:
+            st.error(str(e))
             return
 
         task = user_input.strip()
