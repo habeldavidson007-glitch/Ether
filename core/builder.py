@@ -21,12 +21,15 @@ from typing import Any, Dict, List, Optional, Tuple
 # ── API ─────────────────────────────────────────────────────────────────────────
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL_PRIMARY  = "minimax/minimax-m2.5:free"
-MODEL_FALLBACK = "nousresearch/hermes-3-llama-3.1-405b:free"
+MODELS = [
+    "openrouter/free",
+    "minimax/minimax-m2.5:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free"
+]
 
 
 def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
-    """Single API call. Returns response text or actual error message."""
+    """Hybrid routing with model priority. Returns response text or actual error message."""
     
     # Validate API key
     if not api_key or not api_key.startswith("sk-"):
@@ -39,9 +42,6 @@ def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
     if not messages:
         return "⚠ No input provided."
     
-    # Use primary model only - no fallback loop
-    model_name = MODEL_PRIMARY
-    
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -49,37 +49,51 @@ def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
         "X-Title": "Ether"
     }
     
-    payload = {
-        "model": model_name,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-    }
+    last_error = None
     
-    try:
-        r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
+    for model_name in MODELS:
+        print(f"[TRY] {model_name}")
         
-        if not r2.ok:
-            return f"❌ API ERROR ({model_name}): {r2.text[:300]}"
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        }
         
-        data = r2.json()
-        
-        # Validate response structure
-        if "choices" not in data or len(data["choices"]) == 0:
-            return f"❌ API ERROR ({model_name}): No choices in response"
-        
-        content = data["choices"][0]["message"]["content"]
-        if not content:
-            return f"❌ API ERROR ({model_name}): Empty content"
+        try:
+            r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
             
-        return content.strip()
-        
-    except requests.exceptions.Timeout:
-        return f"❌ EXCEPTION ({model_name}): Request timeout"
-    except requests.exceptions.RequestException as e:
-        return f"❌ EXCEPTION ({model_name}): {str(e)}"
-    except Exception as e:
-        return f"❌ EXCEPTION ({model_name}): {str(e)}"
+            if not r2.ok:
+                text = r2.text
+                
+                if "429" in text:
+                    continue  # try next model
+                else:
+                    return f"❌ API ERROR ({model_name}): {text[:200]}"
+            
+            data = r2.json()
+            
+            # Validate response structure
+            if "choices" not in data or len(data["choices"]) == 0:
+                return f"❌ API ERROR ({model_name}): No choices in response"
+            
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                return f"❌ API ERROR ({model_name}): Empty content"
+                
+            return content.strip()
+            
+        except requests.exceptions.Timeout:
+            last_error = f"❌ EXCEPTION ({model_name}): Request timeout"
+            continue
+        except requests.exceptions.RequestException:
+            last_error = f"❌ EXCEPTION ({model_name}): Network error"
+            continue
+        except Exception as e:
+            return f"❌ EXCEPTION ({model_name}): {str(e)}"
+    
+    return "❌ ALL MODELS FAILED (router + fallback exhausted)"
 
 
 def _safe_json(text: str) -> Optional[Dict]:
