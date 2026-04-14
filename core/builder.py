@@ -25,7 +25,7 @@ MODEL_PRIMARY  = "minimax/minimax-m2.5:free"
 MODEL_FALLBACK = "nousresearch/hermes-3-llama-3.1-405b:free"
 
 
-def _call(messages: List[Dict], api_key: str, model: str = "nvidia/nemotron-3-super",
+def _call(messages: List[Dict], api_key: str, model: str = "nvidia/nemotron-3-super (free)",
           max_tokens: int = 2000) -> str:
     """Single API call. Returns response text or raises."""
     if not api_key or not api_key.startswith("sk-"):
