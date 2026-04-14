@@ -13,6 +13,7 @@ from pathlib import Path
 from core import (
     EtherSession,
     classify,
+    is_casual,
     recall,
     remember,
     build_project_map,
@@ -368,7 +369,11 @@ def _tab_chat():
         elif fix_btn:
             intent = "debug"
         else:
-            intent = classify(task)
+            # Hard casual detection first - prevents slow build pipeline for simple messages
+            if is_casual(task):
+                intent = "casual"
+            else:
+                intent = classify(task)
 
         s.update_mode(intent)
         s.add_turn("user", task)

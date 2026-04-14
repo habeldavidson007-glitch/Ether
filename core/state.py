@@ -34,10 +34,44 @@ _BUILD  = {"create", "generate", "build", "make", "add", "write", "implement", "
 _ANALYZE= {"analyze", "explain", "what", "how", "why", "understand", "review", "check"}
 
 
+def is_casual(text: str) -> bool:
+    """Detect casual/conversational input that should NOT trigger build pipeline."""
+    text = text.lower().strip()
+
+    # Very short messages (under 6 chars) are almost always casual
+    if len(text) < 6:
+        return True
+
+    casual_patterns = [
+        "hi", "hello", "hey", "yo",
+        "thanks", "thank you",
+        "congrats", "congratulations",
+        "lol", "lmao", "haha",
+        "how are you",
+        "good morning", "good night",
+        "nice", "cool"
+    ]
+
+    # Debug keywords should never be casual
+    debug_keywords = ["fix", "bug", "error", "crash", "debug"]
+    if any(kw in text for kw in debug_keywords):
+        return False
+    
+    # Analyze keywords should never be casual
+    analyze_keywords = ["explain", "what", "how", "why", "analyze", "understand", "review"]
+    if any(kw in text for kw in analyze_keywords):
+        return False
+
+    return any(p in text for p in casual_patterns)
+
+
 def classify(text: str) -> str:
-    words = set(text.lower().split())
-    if words & _CASUAL and len(words) <= 4:
+    """Classify user intent. Returns: casual, debug, build, analyze, or task."""
+    # Hard casual detection first
+    if is_casual(text):
         return "casual"
+    
+    words = set(text.lower().split())
     if words & _DEBUG:
         return "debug"
     if words & _BUILD:
