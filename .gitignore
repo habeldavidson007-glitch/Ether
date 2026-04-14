@@ -1,1 +1,10 @@
-Nothing needs to be added to .gitignore since only a source file (`app.py`) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
+```gitignore
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Original rule preserved
+*.log
+```
