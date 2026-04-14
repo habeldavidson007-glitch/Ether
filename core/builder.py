@@ -305,6 +305,10 @@ def run_pipeline(task: str, intent: str, context: str,
         if yield_steps:
             yield_steps(name)
 
+    # Safety fallback - ensure unknown intents default to casual
+    if intent not in ["build", "debug", "casual", "analyze", "task"]:
+        intent = "casual"
+
     if intent == "casual":
         step("💬 Thinking...")
         text = chat(task, history, context, api_key)
