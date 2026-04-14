@@ -378,6 +378,26 @@ def _tab_chat():
 
     # Input
     st.markdown("")
+
+    # ── Quick Upload (Chat-style trigger) ──
+    colA, colB = st.columns([6, 1])
+    with colB:
+        if st.button("＋", help="Upload project ZIP"):
+            st.session_state["show_upload"] = True
+
+    if st.session_state.get("show_upload", False):
+        uploaded = st.file_uploader(
+            "Upload ZIP",
+            type=["zip"],
+            key="chat_upload"
+        )
+
+        if uploaded:
+            _handle_upload(uploaded, s)
+            st.session_state["show_upload"] = False
+            st.success("Project uploaded.")
+            st.rerun()
+
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_area(
             "Message",
