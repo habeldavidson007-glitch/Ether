@@ -12,20 +12,13 @@ import requests
 from typing import Any, Dict, List, Optional, Tuple
 
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODELS = [
-    "qwen/qwen3-coder:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-3-4b-it:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "minimax/minimax-m2.5:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free"
-]
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 
 def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
     if not api_key or not api_key.startswith("sk-"):
-        raise RuntimeError("Invalid OpenRouter API key.")
+        raise RuntimeError("Invalid OpenAI API key.")
 
     max_tokens = min(max_tokens, 800)
 
@@ -35,45 +28,32 @@ def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8501",
-        "X-Title": "Ether"
     }
 
-    last_error = None
-
-    for model_name in MODELS:
-        print(f"[TRY] {model_name}")
-        payload = {
-            "model": model_name,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-        }
-        try:
-            r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
-            if not r.ok:
-                text = r.text
-                if "429" in text:
-                    continue
-                else:
-                    return f"❌ API ERROR ({model_name}): {text[:200]}"
-            data = r.json()
-            if "choices" not in data or len(data["choices"]) == 0:
-                return f"❌ API ERROR ({model_name}): No choices in response"
-            content = data["choices"][0]["message"]["content"]
-            if not content:
-                return f"❌ API ERROR ({model_name}): Empty content"
-            return content.strip()
-        except requests.exceptions.Timeout:
-            last_error = f"❌ EXCEPTION ({model_name}): Request timeout"
-            continue
-        except requests.exceptions.RequestException:
-            last_error = f"❌ EXCEPTION ({model_name}): Network error"
-            continue
-        except Exception as e:
-            return f"❌ EXCEPTION ({model_name}): {str(e)}"
-
-    return last_error or "❌ ALL MODELS FAILED"
+    payload = {
+        "model": DEFAULT_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+    }
+    try:
+        r = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=30)
+        if not r.ok:
+            text = r.text
+            return f"❌ API ERROR ({DEFAULT_MODEL}): {text[:300]}"
+        data = r.json()
+        if "choices" not in data or len(data["choices"]) == 0:
+            return f"❌ API ERROR ({DEFAULT_MODEL}): No choices in response"
+        content = data["choices"][0]["message"]["content"]
+        if not content:
+            return f"❌ API ERROR ({DEFAULT_MODEL}): Empty content"
+        return content.strip()
+    except requests.exceptions.Timeout:
+        return f"❌ EXCEPTION ({DEFAULT_MODEL}): Request timeout"
+    except requests.exceptions.RequestException as e:
+        return f"❌ EXCEPTION ({DEFAULT_MODEL}): Network error - {str(e)}"
+    except Exception as e:
+        return f"❌ EXCEPTION ({DEFAULT_MODEL}): {str(e)}"
 
 
 def _safe_json(text: str) -> Optional[Dict]:

@@ -1185,7 +1185,7 @@ def _tab_chat():
     try:
         api_key = _get_api_key()
     except RuntimeError:
-        st.markdown("### Enter OpenRouter API Key")
+        st.markdown("### Enter OpenAI API Key")
         fallback = st.text_input("API Key", type="password", key="global_api_key")
         if fallback:
             st.session_state["api_key"] = fallback
