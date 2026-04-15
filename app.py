@@ -491,7 +491,7 @@ def _build_graph_data(s: EtherSession) -> dict:
                             "target": node_ids[other_path],
                         })
 
-    return {"nodes": nodes, "links": links}
+    return {"nodes": nodes, "edges": links}
 
 
 def _render_brain_graph(graph_data: dict, height: int = 480):
