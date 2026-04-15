@@ -560,83 +560,64 @@ function resize() {{
 resize();
 window.addEventListener('resize', () => {{ resize(); layout(); draw(); }});
 
-// Physics layout
+// Fixed circular layout - no physics, no scattering
 let positions = {{}};
-let velocities = {{}};
-let dragging = null;
-let dragOffset = {{x:0, y:0}};
-let mouse = {{x:0, y:0}};
 let hoveredNode = null;
-let frame = 0;
-let pulse = 0;
+let mouse = {{x:0, y:0}};
 
 function layout() {{
     const W = canvas.width, H = canvas.height;
     const cx = W/2, cy = H/2;
     const count = NODES.length;
-    NODES.forEach((n, i) => {{
-        if (!positions[n.id]) {{
-            const angle = (i / count) * Math.PI * 2;
-            const r = Math.min(W, H) * 0.3;
-            positions[n.id] = {{
-                x: cx + Math.cos(angle) * r * (0.6 + Math.random()*0.4),
-                y: cy + Math.sin(angle) * r * (0.6 + Math.random()*0.4),
-            }};
-            velocities[n.id] = {{x: 0, y: 0}};
-        }}
+    
+    // Separate scenes and scripts
+    const scenes = NODES.filter(n => n.type === 'scene');
+    const scripts = NODES.filter(n => n.type !== 'scene');
+    
+    // Place scenes in outer ring
+    const outerR = Math.min(W, H) * 0.42;
+    scenes.forEach((n, i) => {{
+        const angle = (i / scenes.length) * Math.PI * 2 - Math.PI/2;
+        positions[n.id] = {{
+            x: cx + Math.cos(angle) * outerR,
+            y: cy + Math.sin(angle) * outerR,
+        }};
     }});
-}}
-
-function physics() {{
-    const W = canvas.width, H = canvas.height;
-    const REPEL = 2200, ATTRACT = 0.012, EDGE_ATTRACT = 0.06, DAMPING = 0.82;
-
-    // Repulsion
-    NODES.forEach(a => {{
-        NODES.forEach(b => {{
-            if (a.id === b.id) return;
-            const pa = positions[a.id], pb = positions[b.id];
-            if (!pa || !pb) return;
-            let dx = pa.x - pb.x, dy = pa.y - pb.y;
-            let dist = Math.sqrt(dx*dx + dy*dy) || 1;
-            let force = REPEL / (dist * dist);
-            velocities[a.id].x += (dx/dist) * force;
-            velocities[a.id].y += (dy/dist) * force;
-        }});
+    
+    // Place scripts in inner rings based on status
+    const innerR = Math.min(W, H) * 0.28;
+    const midR = Math.min(W, H) * 0.18;
+    
+    const errors = scripts.filter(n => n.status === 'error');
+    const improves = scripts.filter(n => n.status === 'improve');
+    const clean = scripts.filter(n => n.status === 'ok');
+    
+    let idx = 0;
+    // Error nodes - inner ring, red zone
+    errors.forEach((n, i) => {{
+        const angle = (i / Math.max(errors.length, 1)) * Math.PI * 2 - Math.PI/2;
+        positions[n.id] = {{
+            x: cx + Math.cos(angle) * midR * 0.6,
+            y: cy + Math.sin(angle) * midR * 0.6,
+        }};
     }});
-
-    // Edge attraction
-    EDGES.forEach(e => {{
-        const pa = positions[e.from], pb = positions[e.to];
-        if (!pa || !pb) return;
-        let dx = pb.x - pa.x, dy = pb.y - pa.y;
-        let dist = Math.sqrt(dx*dx + dy*dy);
-        let target = 80;
-        let force = (dist - target) * EDGE_ATTRACT;
-        velocities[e.from].x += (dx/dist) * force;
-        velocities[e.from].y += (dy/dist) * force;
-        velocities[e.to].x   -= (dx/dist) * force;
-        velocities[e.to].y   -= (dy/dist) * force;
+    
+    // Improve nodes - middle ring
+    improves.forEach((n, i) => {{
+        const angle = (i / Math.max(improves.length, 1)) * Math.PI * 2 - Math.PI/2;
+        positions[n.id] = {{
+            x: cx + Math.cos(angle) * midR,
+            y: cy + Math.sin(angle) * midR,
+        }};
     }});
-
-    // Center gravity
-    NODES.forEach(n => {{
-        const p = positions[n.id];
-        if (!p || n.id === dragging) return;
-        let dx = canvas.width/2 - p.x, dy = canvas.height/2 - p.y;
-        velocities[n.id].x += dx * 0.001;
-        velocities[n.id].y += dy * 0.001;
-    }});
-
-    // Integrate
-    NODES.forEach(n => {{
-        if (n.id === dragging) return;
-        const p = positions[n.id], v = velocities[n.id];
-        if (!p || !v) return;
-        v.x *= DAMPING; v.y *= DAMPING;
-        p.x += v.x; p.y += v.y;
-        p.x = Math.max(30, Math.min(canvas.width-30, p.x));
-        p.y = Math.max(30, Math.min(canvas.height-30, p.y));
+    
+    // Clean nodes - outer script ring
+    clean.forEach((n, i) => {{
+        const angle = (i / Math.max(clean.length, 1)) * Math.PI * 2 - Math.PI/2;
+        positions[n.id] = {{
+            x: cx + Math.cos(angle) * innerR,
+            y: cy + Math.sin(angle) * innerR,
+        }};
     }});
 }}
 
@@ -657,7 +638,7 @@ function draw() {{
     ctx.clearRect(0, 0, W, H);
 
     // Background grid
-    ctx.strokeStyle = 'rgba(30,30,45,0.4)';
+    ctx.strokeStyle = 'rgba(30,30,45,0.3)';
     ctx.lineWidth = 0.5;
     for(let x = 0; x < W; x += 40) {{
         ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
@@ -675,38 +656,23 @@ function draw() {{
         ctx.lineTo(pb.x, pb.y);
         if (e.dashed) {{
             ctx.setLineDash([3,5]);
-            ctx.strokeStyle = 'rgba(110,106,240,0.2)';
+            ctx.strokeStyle = 'rgba(110,106,240,0.25)';
         }} else {{
             ctx.setLineDash([]);
-            ctx.strokeStyle = 'rgba(74,74,100,0.5)';
+            ctx.strokeStyle = 'rgba(74,74,100,0.4)';
         }}
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.setLineDash([]);
     }});
 
-    // Nodes
-    const t = Date.now() / 1000;
+    // Nodes - no animations, static rendering
     NODES.forEach(n => {{
         const p = positions[n.id];
         if (!p) return;
         const isHovered = hoveredNode && hoveredNode.id === n.id;
         const r = n.type === 'scene' ? 14 : 10;
-        const rActual = isHovered ? r * 1.3 : r;
-
-        // Glow for error/improve/hovered
-        if (n.status === 'error' || n.status === 'improve' || isHovered) {{
-            const glowR = rActual + 8 + Math.sin(t*3)*3;
-            const grd = ctx.createRadialGradient(p.x, p.y, rActual, p.x, p.y, glowR);
-            let glowColor = n.status === 'error' ? 'rgba(240,110,110,' : 'rgba(245,200,66,';
-            if (isHovered) glowColor = 'rgba(110,106,240,';
-            grd.addColorStop(0, glowColor + '0.3)');
-            grd.addColorStop(1, glowColor + '0)');
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, glowR, 0, Math.PI*2);
-            ctx.fillStyle = grd;
-            ctx.fill();
-        }}
+        const rActual = isHovered ? r * 1.25 : r;
 
         // Node body
         ctx.beginPath();
@@ -722,13 +688,22 @@ function draw() {{
         }}
         ctx.fillStyle = n.color;
         ctx.fill();
-        ctx.strokeStyle = isHovered ? '#6e6af0' : 'rgba(255,255,255,0.1)';
+        ctx.strokeStyle = isHovered ? '#6e6af0' : 'rgba(255,255,255,0.15)';
         ctx.lineWidth = isHovered ? 2 : 1;
         ctx.stroke();
 
+        // Highlight ring for error/improve (static, no pulse)
+        if (n.status === 'error' || n.status === 'improve') {{
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, rActual + 3, 0, Math.PI*2);
+            ctx.strokeStyle = n.status === 'error' ? 'rgba(240,110,110,0.4)' : 'rgba(245,200,66,0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        }}
+
         // Label
         ctx.font = `${{isHovered ? 'bold ' : ''}}9px Space Mono, monospace`;
-        ctx.fillStyle = isHovered ? '#fff' : 'rgba(200,200,220,0.7)';
+        ctx.fillStyle = isHovered ? '#fff' : 'rgba(200,200,220,0.75)';
         ctx.textAlign = 'center';
         ctx.fillText(n.label.substring(0,12), p.x, p.y + rActual + 11);
     }});
@@ -740,26 +715,11 @@ function draw() {{
     statsEl.innerHTML = `${{NODES.length}} nodes · ${{EDGES.length}} edges<br><span style="color:#f06e6e">${{errs}} errors</span> · <span style="color:#f5c842">${{imps}} improve</span> · <span style="color:#4a4a64">${{ok}} clean</span>`;
 }}
 
-// Animate
-function animate() {{
-    frame++;
-    if (frame % 2 === 0) physics();
-    draw();
-    requestAnimationFrame(animate);
-}}
-
 // Mouse events
 canvas.addEventListener('mousemove', e => {{
     const rect = canvas.getBoundingClientRect();
     mouse.x = e.clientX - rect.left;
     mouse.y = e.clientY - rect.top;
-
-    if (dragging) {{
-        positions[dragging].x = mouse.x + dragOffset.x;
-        positions[dragging].y = mouse.y + dragOffset.y;
-        velocities[dragging] = {{x:0, y:0}};
-        return;
-    }}
 
     const node = getNodeAt(mouse.x, mouse.y);
     hoveredNode = node;
@@ -768,37 +728,22 @@ canvas.addEventListener('mousemove', e => {{
         tooltip.style.top  = (e.clientY - 10) + 'px';
         tooltip.textContent = node.tooltip;
         tooltip.style.opacity = '1';
-        canvas.style.cursor = 'grab';
+        canvas.style.cursor = 'pointer';
     }} else {{
         tooltip.style.opacity = '0';
         canvas.style.cursor = 'default';
     }}
-}});
-
-canvas.addEventListener('mousedown', e => {{
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const node = getNodeAt(mx, my);
-    if (node) {{
-        dragging = node.id;
-        dragOffset.x = positions[node.id].x - mx;
-        dragOffset.y = positions[node.id].y - my;
-        canvas.style.cursor = 'grabbing';
-    }}
-}});
-
-canvas.addEventListener('mouseup', () => {{
-    dragging = null;
-    canvas.style.cursor = 'default';
+    draw();
 }});
 
 canvas.addEventListener('mouseleave', () => {{
     tooltip.style.opacity = '0';
     hoveredNode = null;
+    draw();
 }});
 
 layout();
-animate();
+draw();
 </script>
 </body>
 </html>
