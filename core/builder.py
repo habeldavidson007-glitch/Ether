@@ -1,6 +1,5 @@
 """
 Builder — The AI pipeline.
-NOTE: All OpenAI/OpenRouter API calls have been removed.
 """
 
 import json
@@ -8,7 +7,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
-def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
+def _call(messages: List[Dict], max_tokens: int = 800) -> str:
     """Placeholder - AI integration removed."""
     return "⚠ AI integration has been removed. No API calls available."
 
@@ -137,19 +136,19 @@ No JSON output — just clear, useful text."""
 
 # ── Pipeline Steps ──────────────────────────────────────────────────────────────
 
-def think(task: str, context: str, api_key: str) -> Dict:
+def think(task: str, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _THINK_SYSTEM},
         {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context}"}
     ]
-    raw = _call(messages, api_key, max_tokens=600)
+    raw = _call(messages, max_tokens=600)
     result = _safe_json(raw)
     if not result:
         result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
     return result
 
 
-def plan(task: str, thought: Dict, context: str, api_key: str) -> Dict:
+def plan(task: str, thought: Dict, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _PLAN_SYSTEM},
         {"role": "user", "content": (
@@ -158,14 +157,14 @@ def plan(task: str, thought: Dict, context: str, api_key: str) -> Dict:
             f"Project context:\n{context}"
         )}
     ]
-    raw = _call(messages, api_key, max_tokens=800)
+    raw = _call(messages, max_tokens=800)
     result = _safe_json(raw)
     if not result:
         result = {"files": [], "connections": [], "notes": raw[:200]}
     return result
 
 
-def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str) -> Dict:
+def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _BUILD_SYSTEM},
         {"role": "user", "content": (
@@ -175,7 +174,7 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str)
             f"Existing code:\n{context}"
         )}
     ]
-    raw = _call(messages, api_key, max_tokens=3000)
+    raw = _call(messages, max_tokens=3000)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -185,12 +184,12 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str)
     return result
 
 
-def debug(error_log: str, context: str, api_key: str) -> Dict:
+def debug(error_log: str, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _DEBUG_SYSTEM},
         {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context}"}
     ]
-    raw = _call(messages, api_key, max_tokens=2500)
+    raw = _call(messages, max_tokens=2500)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -202,7 +201,7 @@ def debug(error_log: str, context: str, api_key: str) -> Dict:
     return result
 
 
-def analyze(task: str, context: str, history: List[Dict], api_key: str,
+def analyze(task: str, context: str, history: List[Dict],
             chat_mode: str = "mixed") -> str:
     """PATCHED: dedicated analyze path — always injects full context."""
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
@@ -214,10 +213,10 @@ def analyze(task: str, context: str, history: List[Dict], api_key: str,
         messages.append({"role": "user", "content": f"Task: {task}\n\nACTUAL PROJECT CODE:\n{context}"})
     else:
         messages.append({"role": "user", "content": task})
-    return _call(messages, api_key, max_tokens=800)
+    return _call(messages, max_tokens=800)
 
 
-def chat(message: str, history: List[Dict], context: str, api_key: str,
+def chat(message: str, history: List[Dict], context: str,
          chat_mode: str = "mixed") -> str:
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
     system = _CHAT_SYSTEM + mode_suffix
@@ -228,13 +227,13 @@ def chat(message: str, history: List[Dict], context: str, api_key: str,
         messages.append({"role": "user", "content": f"[Project context]\n{context}\n\n{message}"})
     else:
         messages.append({"role": "user", "content": message})
-    return _call(messages, api_key, max_tokens=800)
+    return _call(messages, max_tokens=800)
 
 
 # ── Full Pipeline Entry Point ───────────────────────────────────────────────────
 
 def run_pipeline(task: str, intent: str, context: str,
-                 history: List[Dict], api_key: str,
+                 history: List[Dict],
                  yield_steps=None,
                  chat_mode: str = "mixed") -> Tuple[Dict, List[str]]:
     log = []
@@ -249,30 +248,30 @@ def run_pipeline(task: str, intent: str, context: str,
 
     if intent == "casual":
         step("💬 Thinking...")
-        text = chat(task, history, context, api_key, chat_mode=chat_mode)
+        text = chat(task, history, context, chat_mode=chat_mode)
         return {"type": "chat", "text": text}, log
 
     # PATCHED: analyze has dedicated path
     if intent == "analyze":
         step("🔬 Analyzing project...")
-        text = analyze(task, context, history, api_key, chat_mode=chat_mode)
+        text = analyze(task, context, history, chat_mode=chat_mode)
         return {"type": "chat", "text": text}, log
 
     if intent == "debug":
         step("🔍 Diagnosing...")
-        result = debug(task, context, api_key)
+        result = debug(task, context)
         result["type"] = "debug"
         return result, log
 
     # Build pipeline
     step("🧠 Understanding...")
-    thought = think(task, context, api_key)
+    thought = think(task, context)
 
     step("📋 Planning...")
-    blueprint = plan(task, thought, context, api_key)
+    blueprint = plan(task, thought, context)
 
     step("⚙️ Building...")
-    result = build(task, thought, blueprint, context, api_key)
+    result = build(task, thought, blueprint, context)
     result["type"] = "build"
     result["thought"] = thought
     result["blueprint"] = blueprint
