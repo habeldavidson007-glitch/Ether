@@ -1090,6 +1090,8 @@ window.addEventListener('resize', handleResize);
 // ── Start ────────────────────────────────────────────────────────────────────
 animate();
 console.log('[BrainMap] Initialized with', NODES.length, 'nodes and', LINKS.length, 'edges');
+
+}} // End of NODES guard
 </script>
 </body>
 </html>
