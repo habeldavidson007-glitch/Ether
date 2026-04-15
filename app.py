@@ -418,13 +418,22 @@ def _handle_upload(uploaded, s: EtherSession):
 # ── Brain Graph (Three.js) ─────────────────────────────────────────────────────
 
 def _build_graph_data(s: EtherSession) -> dict:
-    """Convert project map into nodes/edges for the brain graph."""
+    """
+    Convert project map into nodes/edges for the brain graph.
+    
+    Returns a dict with:
+    - nodes: list of node objects with id, label, type, status, tooltip
+    - links: list of edge objects with source, target
+    
+    Status values: "error", "improve", "clean", "scene"
+    Type values: "script", "scene"
+    """
     if not s.project_loaded or not s.project_map:
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "links": []}
 
     pm = s.project_map
     nodes = []
-    edges = []
+    links = []
     node_ids = {}
 
     # Script nodes
@@ -436,26 +445,21 @@ def _build_graph_data(s: EtherSession) -> dict:
         name = Path(path).stem
 
         if issues:
-            color = "#f06e6e"
             status = "error"
-            tooltip = "ISSUES:\n" + "\n".join(f"• {x}" for x in issues[:5])
+            tooltip = f"📄 {name}\n\n⚠️ ISSUES:\n" + "\n".join(f"• {x}" for x in issues[:5])
         elif improvements:
-            color = "#f5c842"
             status = "improve"
-            tooltip = "IMPROVEMENTS:\n" + "\n".join(f"• {x}" for x in improvements[:5])
+            tooltip = f"📄 {name}\n\n💡 IMPROVEMENTS:\n" + "\n".join(f"• {x}" for x in improvements[:5])
         else:
-            color = "#4a4a64"
-            status = "ok"
-            tooltip = f"{name}\n{data.get('extends','')}\n{len(data.get('functions',[]))} functions"
+            status = "clean"
+            tooltip = f"📄 {name}\n\nExtends: {data.get('extends', 'None')}\nFunctions: {len(data.get('functions', []))}"
 
         nodes.append({
             "id": nid,
             "label": name,
-            "color": color,
             "status": status,
             "tooltip": tooltip,
             "type": "script",
-            "functions": len(data.get("functions", [])),
         })
 
     # Scene nodes
@@ -466,15 +470,14 @@ def _build_graph_data(s: EtherSession) -> dict:
         nodes.append({
             "id": nid,
             "label": name,
-            "color": "#2a3a5a",
             "status": "scene",
-            "tooltip": f"Scene: {name}\n{len(data.get('nodes',[]))} nodes",
+            "tooltip": f"🎬 Scene: {name}\n\nNodes: {len(data.get('nodes', []))}",
             "type": "scene",
         })
-        # Edge: scene → script
+        # Link: scene → script
         for script_path in data.get("scripts", []):
             if script_path in node_ids:
-                edges.append({"from": nid, "to": node_ids[script_path]})
+                links.append({"source": nid, "target": node_ids[script_path]})
 
     # Script extends relationships
     for path, data in pm.get("scripts", {}).items():
@@ -483,17 +486,33 @@ def _build_graph_data(s: EtherSession) -> dict:
             for other_path, other_data in pm.get("scripts", {}).items():
                 if Path(other_path).stem == ext and path != other_path:
                     if path in node_ids and other_path in node_ids:
-                        edges.append({
-                            "from": node_ids[path],
-                            "to": node_ids[other_path],
-                            "dashed": True
+                        links.append({
+                            "source": node_ids[path],
+                            "target": node_ids[other_path],
                         })
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "links": links}
 
 
 def _render_brain_graph(graph_data: dict, height: int = 480):
-    """Render Three.js interactive brain graph."""
+    """
+    Render Three.js interactive force-directed brain graph.
+    
+    Features:
+    - Force-directed layout with physics simulation (repulsion + spring links + center gravity)
+    - Pan/zoom controls (drag to pan, scroll to zoom)
+    - Draggable nodes (grab and move individual nodes)
+    - Hover highlighting with tooltips
+    - Color-coded nodes by status (error=red, improve=yellow, clean=blue, scene=gray)
+    - Dark theme matching Streamlit dark mode
+    
+    Force Simulation Parameters (tunable):
+    - REPEL_STRENGTH: How strongly nodes push apart (higher = more spread out)
+    - LINK_DISTANCE: Resting length of edges (higher = looser connections)
+    - LINK_STRENGTH: How stiff the springs are (0-1, higher = tighter)
+    - CENTER_GRAVITY: Pull toward center (prevents nodes flying to infinity)
+    - DAMPING: Velocity decay per frame (lower = longer settling time)
+    """
     nodes_json = json.dumps(graph_data["nodes"])
     edges_json = json.dumps(graph_data["edges"])
 
@@ -504,246 +523,567 @@ def _render_brain_graph(graph_data: dict, height: int = 480):
 <meta charset="utf-8">
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ background: #07070a; overflow: hidden; font-family: 'Space Mono', monospace; }}
-#canvas {{ width: 100%; height: {height}px; display: block; }}
+body {{ 
+    background: #07070a; 
+    overflow: hidden; 
+    font-family: 'Space Mono', monospace;
+    touch-action: none;
+}}
+#container {{ 
+    width: 100%; 
+    height: {height}px; 
+    position: relative;
+}}
+canvas {{ display: block; width: 100%; height: {height}px; }}
 #tooltip {{
-    position: fixed; pointer-events: none;
+    position: absolute; pointer-events: none;
     background: rgba(13,13,20,0.95);
     border: 1px solid #2a2a3a;
     border-left: 2px solid #6e6af0;
     color: #c4c4d4;
-    font-family: monospace; font-size: 10px;
-    padding: 6px 10px; border-radius: 4px;
-    white-space: pre; max-width: 240px;
+    font-family: 'Space Mono', monospace; font-size: 11px;
+    padding: 8px 12px; border-radius: 4px;
+    white-space: pre; max-width: 260px;
     opacity: 0; transition: opacity 0.15s;
     z-index: 999; line-height: 1.5;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }}
 #legend {{
-    position: absolute; bottom: 10px; left: 10px;
-    display: flex; gap: 10px; align-items: center;
-    font-family: monospace; font-size: 9px; color: #4a4a64;
+    position: absolute; bottom: 12px; left: 12px;
+    display: flex; gap: 12px; align-items: center;
+    font-family: 'Space Mono', monospace; font-size: 10px; color: #4a4a64;
+    background: rgba(13,13,20,0.8);
+    padding: 6px 10px; border-radius: 4px;
+    border: 1px solid #1c1c28;
 }}
-.leg {{ display: flex; align-items: center; gap: 4px; }}
-.leg-dot {{ width: 8px; height: 8px; border-radius: 50%; }}
+.leg {{ display: flex; align-items: center; gap: 5px; }}
+.leg-dot {{ width: 9px; height: 9px; border-radius: 50%; }}
 #stats {{
-    position: absolute; top: 10px; right: 10px;
-    font-family: monospace; font-size: 9px; color: #4a4a64;
+    position: absolute; top: 12px; right: 12px;
+    font-family: 'Space Mono', monospace; font-size: 10px; color: #4a4a64;
     text-align: right; line-height: 1.6;
+    background: rgba(13,13,20,0.8);
+    padding: 6px 10px; border-radius: 4px;
+    border: 1px solid #1c1c28;
+}}
+#controls-hint {{
+    position: absolute; top: 12px; left: 12px;
+    font-family: 'Space Mono', monospace; font-size: 9px; color: #2a2a3a;
+    line-height: 1.4;
+    pointer-events: none;
 }}
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
+<div id="container"></div>
 <div id="tooltip"></div>
 <div id="legend">
-    <div class="leg"><div class="leg-dot" style="background:#f06e6e"></div>issues</div>
-    <div class="leg"><div class="leg-dot" style="background:#f5c842"></div>improve</div>
-    <div class="leg"><div class="leg-dot" style="background:#4a4a64"></div>clean</div>
-    <div class="leg"><div class="leg-dot" style="background:#2a3a5a"></div>scene</div>
+    <div class="leg"><div class="leg-dot" style="background:#f06e6e;box-shadow:0 0 6px #f06e6e66"></div>error</div>
+    <div class="leg"><div class="leg-dot" style="background:#f5c842;box-shadow:0 0 6px #f5c84266"></div>improve</div>
+    <div class="leg"><div class="leg-dot" style="background:#4a9eff;box-shadow:0 0 6px #4a9eff66"></div>clean</div>
+    <div class="leg"><div class="leg-dot" style="background:#3a4a5a;box-shadow:0 0 6px #3a4a5a66"></div>scene</div>
 </div>
 <div id="stats"></div>
+<div id="controls-hint">Drag: pan | Scroll: zoom | Drag node: move</div>
+
+<!-- Three.js from CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <script>
+// ── Data ─────────────────────────────────────────────────────────────────────
 const NODES = {nodes_json};
-const EDGES = {edges_json};
+const LINKS = {edges_json};
 
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+// ── Force Simulation Parameters (TUNABLE) ────────────────────────────────────
+const CONFIG = {{
+    REPEL_STRENGTH: 800,        // Node repulsion force (higher = more spread)
+    LINK_DISTANCE: 120,         // Resting edge length in pixels
+    LINK_STRENGTH: 0.08,        // Spring stiffness (0-1, lower = looser)
+    CENTER_GRAVITY: 0.02,       // Pull toward center (prevents flying away)
+    DAMPING: 0.88,              // Velocity decay per frame (lower = faster stop)
+    MAX_VELOCITY: 15,           // Cap node speed
+    NODE_RADIUS: 12,            // Base node size
+    SCENE_SIZE: 16,             // Scene node size (larger)
+}};
+
+// ── Three.js Setup ───────────────────────────────────────────────────────────
+const container = document.getElementById('container');
 const tooltip = document.getElementById('tooltip');
 const statsEl = document.getElementById('stats');
 
-// Canvas sizing
-function resize() {{
-    canvas.width = canvas.clientWidth;
-    canvas.height = {height};
+let width = container.clientWidth;
+let height = {height};
+
+// Scene, Camera, Renderer
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07070a);
+
+// Orthographic camera for 2D-like view (easier interaction)
+const frustumSize = Math.max(width, height) * 0.8;
+const aspect = width / height;
+const camera = new THREE.OrthographicCamera(
+    -frustumSize * aspect / 2, frustumSize * aspect / 2,
+    frustumSize / 2, -frustumSize / 2,
+    0.1, 1000
+);
+camera.position.z = 100;
+
+const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: false }});
+renderer.setSize(width, height);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+// ── View Transform (Pan/Zoom) ────────────────────────────────────────────────
+let viewOffset = {{ x: 0, y: 0 }};
+let viewZoom = 1;
+let isPanning = false;
+let panStart = {{ x: 0, y: 0 }};
+
+function updateCamera() {{
+    const fs = frustumSize / viewZoom;
+    const a = width / height;
+    camera.left = -fs * a / 2 + viewOffset.x;
+    camera.right = fs * a / 2 + viewOffset.x;
+    camera.top = fs / 2 - viewOffset.y;
+    camera.bottom = -fs / 2 - viewOffset.y;
+    camera.updateProjectionMatrix();
 }}
-resize();
-window.addEventListener('resize', () => {{ resize(); layout(); draw(); }});
+updateCamera();
 
-// Fixed circular layout - no physics, no scattering
-let positions = {{}};
-let hoveredNode = null;
-let mouse = {{x:0, y:0}};
+// ── Node & Edge Objects ──────────────────────────────────────────────────────
+const nodeMeshes = new Map();  // id -> mesh
+const edgeLines = [];          // array of Line objects
+const nodeData = new Map();    // id -> physics data
 
-function layout() {{
-    const W = canvas.width, H = canvas.height;
-    const cx = W/2, cy = H/2;
-    const count = NODES.length;
-    
-    // Separate scenes and scripts
-    const scenes = NODES.filter(n => n.type === 'scene');
-    const scripts = NODES.filter(n => n.type !== 'scene');
-    
-    // Place scenes in outer ring
-    const outerR = Math.min(W, H) * 0.42;
-    scenes.forEach((n, i) => {{
-        const angle = (i / scenes.length) * Math.PI * 2 - Math.PI/2;
-        positions[n.id] = {{
-            x: cx + Math.cos(angle) * outerR,
-            y: cy + Math.sin(angle) * outerR,
-        }};
+// Initialize physics data for each node
+NODES.forEach(n => {{
+    nodeData.set(n.id, {{
+        x: (Math.random() - 0.5) * 200,
+        y: (Math.random() - 0.5) * 200,
+        vx: 0, vy: 0,
+        fx: 0, fy: 0,  // accumulated forces
+        isDragging: false,
+        charge: -CONFIG.CHARGE_MAX - (Math.random() * (CONFIG.CHARGE_MIN - CONFIG.CHARGE_MAX)),
     }});
-    
-    // Place scripts in inner rings based on status
-    const innerR = Math.min(W, H) * 0.28;
-    const midR = Math.min(W, H) * 0.18;
-    
-    const errors = scripts.filter(n => n.status === 'error');
-    const improves = scripts.filter(n => n.status === 'improve');
-    const clean = scripts.filter(n => n.status === 'ok');
-    
-    let idx = 0;
-    // Error nodes - inner ring, red zone
-    errors.forEach((n, i) => {{
-        const angle = (i / Math.max(errors.length, 1)) * Math.PI * 2 - Math.PI/2;
-        positions[n.id] = {{
-            x: cx + Math.cos(angle) * midR * 0.6,
-            y: cy + Math.sin(angle) * midR * 0.6,
-        }};
-    }});
-    
-    // Improve nodes - middle ring
-    improves.forEach((n, i) => {{
-        const angle = (i / Math.max(improves.length, 1)) * Math.PI * 2 - Math.PI/2;
-        positions[n.id] = {{
-            x: cx + Math.cos(angle) * midR,
-            y: cy + Math.sin(angle) * midR,
-        }};
-    }});
-    
-    // Clean nodes - outer script ring
-    clean.forEach((n, i) => {{
-        const angle = (i / Math.max(clean.length, 1)) * Math.PI * 2 - Math.PI/2;
-        positions[n.id] = {{
-            x: cx + Math.cos(angle) * innerR,
-            y: cy + Math.sin(angle) * innerR,
-        }};
-    }});
-}}
+}});
 
-function getNodeAt(mx, my) {{
-    for (let i = NODES.length-1; i >= 0; i--) {{
-        const n = NODES[i];
-        const p = positions[n.id];
-        if (!p) continue;
-        const r = n.type === 'scene' ? 14 : 10;
-        let dx = mx - p.x, dy = my - p.y;
-        if (dx*dx + dy*dy < r*r*2.5) return n;
+// Create node geometries
+function createNodeGeometry(node) {{
+    const isScene = node.type === 'scene';
+    const radius = isScene ? CONFIG.SCENE_SIZE : CONFIG.NODE_RADIUS;
+    
+    if (isScene) {{
+        // Octahedron for scenes (diamond-like)
+        return new THREE.OctahedronGeometry(radius * 0.7, 0);
+    }} else {{
+        // Sphere for scripts
+        return new THREE.SphereGeometry(radius, 16, 16);
     }}
-    return null;
+}}
+
+// Create materials based on status
+function getNodeMaterial(node, isHovered = false) {{
+    const colors = {{
+        error: 0xf06e6e,
+        improve: 0xf5c842,
+        ok: 0x4a9eff,
+        scene: 0x3a4a5a,
+    }};
+    const glowColors = {{
+        error: 0xff8888,
+        improve: 0xffdd88,
+        ok: 0x88ccff,
+        scene: 0x6688aa,
+    }};
+    
+    const baseColor = colors[node.status] || 0x4a4a64;
+    const glowColor = glowColors[node.status] || 0x666688;
+    
+    return new THREE.MeshStandardMaterial({{
+        color: baseColor,
+        emissive: isHovered ? glowColor : baseColor,
+        emissiveIntensity: isHovered ? 0.6 : 0.2,
+        roughness: 0.4,
+        metalness: 0.6,
+    }});
+}}
+
+// Create nodes
+NODES.forEach(node => {{
+    const geometry = createNodeGeometry(node);
+    const material = getNodeMaterial(node);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData = {{ nodeId: node.id, node: node }};
+    mesh.position.set(nodeData.get(node.id).x, nodeData.get(node.id).y, 0);
+    scene.add(mesh);
+    nodeMeshes.set(node.id, mesh);
+}});
+
+// Create edges (thin lines)
+const edgeMaterial = new THREE.LineBasicMaterial({{ 
+    color: 0x2a2a3a, 
+    transparent: true, 
+    opacity: 0.4,
+}});
+
+LINKS.forEach(link => {{
+    const points = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)];
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.Line(geometry, edgeMaterial);
+    scene.add(line);
+    edgeLines.push({{ line, link }});
+}});
+
+// ── Background Grid ──────────────────────────────────────────────────────────
+const gridHelper = new THREE.GridHelper(1000, 50, 0x1a1a28, 0x1a1a28);
+gridHelper.rotation.x = Math.PI / 2;
+gridHelper.position.z = -1;
+scene.add(gridHelper);
+
+// ── Force-Directed Layout ────────────────────────────────────────────────────
+function computeForces() {{
+    // Reset forces
+    nodeData.forEach(d => {{ d.fx = 0; d.fy = 0; }});
+    
+    // Repulsion between all pairs (Coulomb-like)
+    const nodes = Array.from(nodeData.entries());
+    for (let i = 0; i < nodes.length; i++) {{
+        for (let j = i + 1; j < nodes.length; j++) {{
+            const [id1, d1] = nodes[i];
+            const [id2, d2] = nodes[j];
+            
+            let dx = d2.x - d1.x;
+            let dy = d2.y - d1.y;
+            let distSq = dx * dx + dy * dy;
+            distSq = Math.max(distSq, 100); // Prevent division by zero
+            
+            const force = CONFIG.REPEL_STRENGTH / distSq;
+            const dist = Math.sqrt(distSq);
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+            
+            d1.fx -= fx;
+            d1.fy -= fy;
+            d2.fx += fx;
+            d2.fy += fy;
+        }}
+    }}
+    
+    // Spring forces for edges (Hooke's law)
+    LINKS.forEach(link => {{
+        const d1 = nodeData.get(link.source);
+        const d2 = nodeData.get(link.target);
+        if (!d1 || !d2) return;
+        
+        let dx = d2.x - d1.x;
+        let dy = d2.y - d1.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        
+        // Force proportional to displacement from rest length
+        const displacement = dist - CONFIG.LINK_DISTANCE;
+        const force = CONFIG.LINK_STRENGTH * displacement;
+        
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        
+        d1.fx += fx;
+        d1.fy += fy;
+        d2.fx -= fx;
+        d2.fy -= fy;
+    }});
+    
+    // Center gravity (pull everything toward origin)
+    nodeData.forEach(d => {{
+        d.fx -= d.x * CONFIG.CENTER_GRAVITY;
+        d.fy -= d.y * CONFIG.CENTER_GRAVITY;
+    }});
+}}
+
+function integrate() {{
+    nodeData.forEach((d, id) => {{
+        if (d.isDragging) return;  // Don't update dragged nodes
+        
+        // Apply forces to velocity
+        d.vx += d.fx;
+        d.vy += d.fy;
+        
+        // Damping
+        d.vx *= CONFIG.DAMPING;
+        d.vy *= CONFIG.DAMPING;
+        
+        // Velocity cap
+        const v = Math.sqrt(d.vx * d.vx + d.vy * d.vy);
+        if (v > CONFIG.MAX_VELOCITY) {{
+            d.vx = (d.vx / v) * CONFIG.MAX_VELOCITY;
+            d.vy = (d.vy / v) * CONFIG.MAX_VELOCITY;
+        }}
+        
+        // Update position
+        d.x += d.vx;
+        d.y += d.vy;
+    }});
+}}
+
+function updateNodePositions() {{
+    nodeData.forEach((d, id) => {{
+        const mesh = nodeMeshes.get(id);
+        if (mesh) {{
+            mesh.position.x = d.x;
+            mesh.position.y = d.y;
+        }}
+    }});
+    
+    // Update edge lines
+    edgeLines.forEach(({ line, link }) => {{
+        const d1 = nodeData.get(link.source);
+        const d2 = nodeData.get(link.target);
+        if (d1 && d2) {{
+            const positions = line.geometry.attributes.position.array;
+            positions[0] = d1.x; positions[1] = d1.y; positions[2] = 0.1;
+            positions[3] = d2.x; positions[4] = d2.y; positions[5] = 0.1;
+            line.geometry.attributes.position.needsUpdate = true;
+        }}
+    }});
+}}
+
+// ── Interaction: Raycaster for Hover/Drag ────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let hoveredNode = null;
+let draggedNode = null;
+let dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+let dragOffset = new THREE.Vector3();
+
+function getMouseNDC(clientX, clientY) {{
+    const rect = renderer.domElement.getBoundingClientRect();
+    return {{
+        x: ((clientX - rect.left) / rect.width) * 2 - 1,
+        y: -((clientY - rect.top) / rect.height) * 2 + 1,
+    }};
+}}
+
+function screenToWorld(clientX, clientY) {{
+    const ndc = getMouseNDC(clientX, clientY);
+    const vec = new THREE.Vector3(ndc.x, ndc.y, 0.5);
+    vec.unproject(camera);
+    
+    const dir = vec.clone().sub(camera.position).normalize();
+    const distance = -camera.position.z / dir.z;
+    const pos = camera.position.clone().add(dir.multiplyScalar(distance));
+    return pos;
+}}
+
+renderer.domElement.addEventListener('mousemove', (e) => {{
+    const ndc = getMouseNDC(e.clientX, e.clientY);
+    mouse.set(ndc.x, ndc.y, 0.5);
+    
+    raycaster.setFromCamera(mouse, camera);
+    const meshes = Array.from(nodeMeshes.values());
+    const intersects = raycaster.intersectObjects(meshes);
+    
+    if (intersects.length > 0) {{
+        const hit = intersects[0].object;
+        const nodeId = hit.userData.nodeId;
+        const node = hit.userData.node;
+        
+        if (hoveredNode !== nodeId) {{
+            hoveredNode = nodeId;
+            renderer.domElement.style.cursor = draggedNode ? 'grabbing' : 'pointer';
+            
+            // Update hover state
+            nodeMeshes.forEach((mesh, id) => {{
+                const n = NODES.find(x => x.id === id);
+                mesh.material = getNodeMaterial(n, id === nodeId);
+            }});
+            
+            // Show tooltip
+            tooltip.style.left = (e.clientX + 16) + 'px';
+            tooltip.style.top = (e.clientY + 16) + 'px';
+            tooltip.textContent = node.tooltip;
+            tooltip.style.opacity = '1';
+        }}
+        
+        if (draggedNode) {{
+            const worldPos = screenToWorld(e.clientX, e.clientY);
+            const data = nodeData.get(draggedNode);
+            data.x = worldPos.x - dragOffset.x;
+            data.y = worldPos.y - dragOffset.y;
+            data.vx = 0; data.vy = 0;  // Stop momentum while dragging
+            updateNodePositions();
+        }}
+    }} else {{
+        if (hoveredNode && !draggedNode) {{
+            hoveredNode = null;
+            renderer.domElement.style.cursor = isPanning ? 'grabbing' : 'default';
+            
+            nodeMeshes.forEach((mesh, id) => {{
+                const n = NODES.find(x => x.id === id);
+                mesh.material = getNodeMaterial(n, false);
+            }});
+            
+            tooltip.style.opacity = '0';
+        }}
+    }}
+    
+    draw();
+}});
+
+renderer.domElement.addEventListener('mousedown', (e) => {{
+    if (e.button === 0) {{  // Left click
+        if (hoveredNode) {{
+            draggedNode = hoveredNode;
+            renderer.domElement.style.cursor = 'grabbing';
+            
+            const worldPos = screenToWorld(e.clientX, e.clientY);
+            const data = nodeData.get(draggedNode);
+            dragOffset.set(worldPos.x - data.x, worldPos.y - data.y, 0);
+        }} else {{
+            isPanning = true;
+            panStart = {{ x: e.clientX, y: e.clientY }};
+            renderer.domElement.style.cursor = 'grab';
+        }}
+    }}
+}});
+
+window.addEventListener('mouseup', () => {{
+    if (draggedNode) {{
+        // Release with a small "throw" velocity
+        const data = nodeData.get(draggedNode);
+        data.isDragging = false;
+    }}
+    draggedNode = null;
+    isPanning = false;
+    renderer.domElement.style.cursor = hoveredNode ? 'pointer' : 'default';
+}});
+
+renderer.domElement.addEventListener('mouseleave', () => {{
+    hoveredNode = null;
+    draggedNode = null;
+    isPanning = false;
+    tooltip.style.opacity = '0';
+    renderer.domElement.style.cursor = 'default';
+    nodeMeshes.forEach((mesh, id) => {{
+        const n = NODES.find(x => x.id === id);
+        mesh.material = getNodeMaterial(n, false);
+    }});
+}});
+
+// Pan handling
+renderer.domElement.addEventListener('mousemove', (e) => {{
+    if (isPanning && !draggedNode) {{
+        const dx = e.clientX - panStart.x;
+        const dy = e.clientY - panStart.y;
+        const fs = frustumSize / viewZoom;
+        const a = width / height;
+        viewOffset.x -= dx * (fs * a / width);
+        viewOffset.y += dy * (fs / height);
+        panStart = {{ x: e.clientX, y: e.clientY }};
+        updateCamera();
+        draw();
+    }}
+}});
+
+// Zoom handling
+renderer.domElement.addEventListener('wheel', (e) => {{
+    e.preventDefault();
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    viewZoom *= zoomFactor;
+    viewZoom = Math.max(0.2, Math.min(5, viewZoom));
+    updateCamera();
+    draw();
+}}, {{ passive: false }});
+
+// Click to log (optional communication with parent)
+renderer.domElement.addEventListener('click', (e) => {{
+    if (hoveredNode && !draggedNode && !isPanning) {{
+        const node = NODES.find(n => n.id === hoveredNode);
+        console.log('[BrainMap] Clicked:', node);
+        // Try to communicate with parent Streamlit app
+        try {{
+            window.parent.postMessage({{ type: 'brainmap_click', nodeId: hoveredNode, node: node }}, '*');
+        }} catch(err) {{}}
+    }}
+}});
+
+// ── Lighting ─────────────────────────────────────────────────────────────────
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+
+const pointLight = new THREE.PointLight(0x6e6af0, 0.8, 500);
+pointLight.position.set(50, 50, 100);
+scene.add(pointLight);
+
+const pointLight2 = new THREE.PointLight(0xffaa88, 0.4, 500);
+pointLight2.position.set(-50, -50, 80);
+scene.add(pointLight2);
+
+// ── Animation Loop ───────────────────────────────────────────────────────────
+let simulationRunning = true;
+const MAX_ITERATIONS = 300;  // Run physics for N frames then slow down
+let frameCount = 0;
+
+function animate() {{
+    requestAnimationFrame(animate);
+    
+    // Run physics simulation
+    if (simulationRunning && frameCount < MAX_ITERATIONS) {{
+        computeForces();
+        integrate();
+        updateNodePositions();
+        frameCount++;
+    }} else if (frameCount >= MAX_ITERATIONS) {{
+        // Slow down simulation after initial settling
+        if (frameCount % 5 === 0) {{
+            computeForces();
+            integrate();
+            updateNodePositions();
+        }}
+        frameCount++;
+    }}
+    
+    draw();
 }}
 
 function draw() {{
-    const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
-
-    // Background grid
-    ctx.strokeStyle = 'rgba(30,30,45,0.3)';
-    ctx.lineWidth = 0.5;
-    for(let x = 0; x < W; x += 40) {{
-        ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
-    }}
-    for(let y = 0; y < H; y += 40) {{
-        ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
-    }}
-
-    // Edges
-    EDGES.forEach(e => {{
-        const pa = positions[e.from], pb = positions[e.to];
-        if (!pa || !pb) return;
-        ctx.beginPath();
-        ctx.moveTo(pa.x, pa.y);
-        ctx.lineTo(pb.x, pb.y);
-        if (e.dashed) {{
-            ctx.setLineDash([3,5]);
-            ctx.strokeStyle = 'rgba(110,106,240,0.25)';
-        }} else {{
-            ctx.setLineDash([]);
-            ctx.strokeStyle = 'rgba(74,74,100,0.4)';
-        }}
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.setLineDash([]);
-    }});
-
-    // Nodes - no animations, static rendering
-    NODES.forEach(n => {{
-        const p = positions[n.id];
-        if (!p) return;
-        const isHovered = hoveredNode && hoveredNode.id === n.id;
-        const r = n.type === 'scene' ? 14 : 10;
-        const rActual = isHovered ? r * 1.25 : r;
-
-        // Node body
-        ctx.beginPath();
-        if (n.type === 'scene') {{
-            // Diamond for scenes
-            ctx.moveTo(p.x, p.y - rActual);
-            ctx.lineTo(p.x + rActual, p.y);
-            ctx.lineTo(p.x, p.y + rActual);
-            ctx.lineTo(p.x - rActual, p.y);
-            ctx.closePath();
-        }} else {{
-            ctx.arc(p.x, p.y, rActual, 0, Math.PI*2);
-        }}
-        ctx.fillStyle = n.color;
-        ctx.fill();
-        ctx.strokeStyle = isHovered ? '#6e6af0' : 'rgba(255,255,255,0.15)';
-        ctx.lineWidth = isHovered ? 2 : 1;
-        ctx.stroke();
-
-        // Highlight ring for error/improve (static, no pulse)
-        if (n.status === 'error' || n.status === 'improve') {{
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, rActual + 3, 0, Math.PI*2);
-            ctx.strokeStyle = n.status === 'error' ? 'rgba(240,110,110,0.4)' : 'rgba(245,200,66,0.4)';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-        }}
-
-        // Label
-        ctx.font = `${{isHovered ? 'bold ' : ''}}9px Space Mono, monospace`;
-        ctx.fillStyle = isHovered ? '#fff' : 'rgba(200,200,220,0.75)';
-        ctx.textAlign = 'center';
-        ctx.fillText(n.label.substring(0,12), p.x, p.y + rActual + 11);
-    }});
-
-    // Stats
+    renderer.render(scene, camera);
+    
+    // Update stats display
     const errs = NODES.filter(n => n.status === 'error').length;
     const imps = NODES.filter(n => n.status === 'improve').length;
-    const ok   = NODES.filter(n => n.status === 'ok').length;
-    statsEl.innerHTML = `${{NODES.length}} nodes · ${{EDGES.length}} edges<br><span style="color:#f06e6e">${{errs}} errors</span> · <span style="color:#f5c842">${{imps}} improve</span> · <span style="color:#4a4a64">${{ok}} clean</span>`;
+    const ok = NODES.filter(n => n.status === 'ok').length;
+    const scenes = NODES.filter(n => n.type === 'scene').length;
+    statsEl.innerHTML = `
+        <strong style="color:#6e6af0">${{NODES.length}}</strong> nodes · 
+        <strong style="color:#6e6af0">${{LINKS.length}}</strong> edges<br>
+        <span style="color:#f06e6e">${{errs}} errors</span> · 
+        <span style="color:#f5c842">${{imps}} improve</span> · 
+        <span style="color:#4a9eff">${{ok}} clean</span> · 
+        <span style="color:#3a4a5a">${{scenes}} scenes</span>
+    `;
 }}
 
-// Mouse events
-canvas.addEventListener('mousemove', e => {{
-    const rect = canvas.getBoundingClientRect();
-    mouse.x = e.clientX - rect.left;
-    mouse.y = e.clientY - rect.top;
-
-    const node = getNodeAt(mouse.x, mouse.y);
-    hoveredNode = node;
-    if (node) {{
-        tooltip.style.left = (e.clientX + 14) + 'px';
-        tooltip.style.top  = (e.clientY - 10) + 'px';
-        tooltip.textContent = node.tooltip;
-        tooltip.style.opacity = '1';
-        canvas.style.cursor = 'pointer';
-    }} else {{
-        tooltip.style.opacity = '0';
-        canvas.style.cursor = 'default';
-    }}
+// ── Resize Handler ───────────────────────────────────────────────────────────
+function handleResize() {{
+    width = container.clientWidth;
+    height = container.clientHeight;
+    
+    const fs = frustumSize / viewZoom;
+    const a = width / height;
+    camera.left = -fs * a / 2 + viewOffset.x;
+    camera.right = fs * a / 2 + viewOffset.x;
+    camera.top = fs / 2 - viewOffset.y;
+    camera.bottom = -fs / 2 - viewOffset.y;
+    camera.updateProjectionMatrix();
+    
+    renderer.setSize(width, height);
     draw();
-}});
+}}
 
-canvas.addEventListener('mouseleave', () => {{
-    tooltip.style.opacity = '0';
-    hoveredNode = null;
-    draw();
-}});
+window.addEventListener('resize', handleResize);
 
-layout();
-draw();
+// ── Start ────────────────────────────────────────────────────────────────────
+animate();
+console.log('[BrainMap] Initialized with', NODES.length, 'nodes and', LINKS.length, 'edges');
 </script>
 </body>
 </html>
