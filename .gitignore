@@ -1,1 +1,1 @@
-Nothing should be ignored since only a Python source file (`core/builder.py`) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
+Nothing should be ignored based on the provided file changes. The modification of 'core/builder.py' represents a source code change, which should not be added to .gitignore.

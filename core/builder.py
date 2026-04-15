@@ -13,11 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemma-2-9b-it:free"
+DEFAULT_MODEL = "minimax/minimax-m2.5:free"
 FALLBACK_MODELS = [
-    "meta-llama/llama-3.1-8b-instruct:free",
-    "mistralai/mistral-7b-instruct:free",
-    "qwen/qwen-2.5-7b-instruct:free",
+    "nousresearch/hermes-3-llama-3.1-405b-instruct:free",
 ]
 
 
