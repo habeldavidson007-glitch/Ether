@@ -834,18 +834,20 @@ function updateNodePositions() {{
     }});
     
     // Update edge lines
-    edgeLines.forEach((item) => {{
-        const line = item.line;
-        const link = item.link;
-        const d1 = nodeData.get(link.source);
-        const d2 = nodeData.get(link.target);
-        if (d1 && d2) {{
-            const positions = line.geometry.attributes.position.array;
-            positions[0] = d1.x; positions[1] = d1.y; positions[2] = 0.1;
-            positions[3] = d2.x; positions[4] = d2.y; positions[5] = 0.1;
-            line.geometry.attributes.position.needsUpdate = true;
-        }}
-    }});
+    if (edgeLines.length > 0) {{
+        edgeLines.forEach((item) => {{
+            const line = item.line;
+            const link = item.link;
+            const d1 = nodeData.get(link.source);
+            const d2 = nodeData.get(link.target);
+            if (d1 && d2) {{
+                const positions = line.geometry.attributes.position.array;
+                positions[0] = d1.x; positions[1] = d1.y; positions[2] = 0.1;
+                positions[3] = d2.x; positions[4] = d2.y; positions[5] = 0.1;
+                line.geometry.attributes.position.needsUpdate = true;
+            }}
+        }});
+    }}
 }}
 
 // ── Interaction: Raycaster for Hover/Drag ────────────────────────────────────
