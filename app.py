@@ -834,7 +834,7 @@ function updateNodePositions() {{
     }});
     
     // Update edge lines
-    edgeLines.forEach(({ line, link }) => {{
+    edgeLines.forEach(({{ line, link }}) => {{
         const d1 = nodeData.get(link.source);
         const d2 = nodeData.get(link.target);
         if (d1 && d2) {{
