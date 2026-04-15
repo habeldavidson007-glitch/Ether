@@ -1424,8 +1424,10 @@ def _tab_chat():
         s.update_mode(intent)
         s.add_turn("user", task)
 
+        # Only provide project context for non-casual intents
+        # Casual greetings should not trigger code analysis
         context = ""
-        if s.project_loaded and s.project_map and s.file_contents:
+        if intent != "casual" and s.project_loaded and s.project_map and s.file_contents:
             context = select_context(task, s.project_map, s.file_contents)
             mem = s.get_memory_context(task)
             if mem:
