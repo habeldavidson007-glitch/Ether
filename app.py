@@ -822,19 +822,9 @@ def _sidebar():
         </div>
         """, unsafe_allow_html=True)
 
-        # Project upload
+        # Project upload moved to Chat tab
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-title">Project</div>', unsafe_allow_html=True)
-
-        uploaded = st.file_uploader("Upload ZIP", type=["zip"], key="sidebar_upload",
-                                     label_visibility="collapsed")
-        if uploaded is not None:
-            key = _get_uploaded_file_key(uploaded)
-            if st.session_state.get("last_uploaded_file_key") != key:
-                success = _handle_upload(uploaded, s)
-                if success:
-                    st.session_state["last_uploaded_file_key"] = key
-                    st.rerun()
 
         if s.project_loaded:
             stats = s.project_map.get("stats", {})
@@ -843,6 +833,12 @@ def _sidebar():
             c2.metric("Scenes", stats.get("scene_count", 0))
             c1.metric("Issues", stats.get("total_issues", 0))
             c2.metric("Improve", stats.get("total_improvements", 0))
+        else:
+            st.markdown(
+                '<div style="color:#4a4a64;font-family:monospace;font-size:0.7rem;'
+                'padding:0.5rem 0;">Upload a ZIP file from the CHAT tab to load your project.</div>',
+                unsafe_allow_html=True
+            )
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1027,6 +1023,90 @@ def _tab_chat():
 
     # ── Input area ──
     st.markdown("")
+    
+    # Unified upload section - visible in chat tab (shows project status if already loaded)
+    st.markdown(
+        '<div style="background:var(--surface2);border:1px solid var(--border);'
+        'border-radius:6px;padding:0.75rem 1rem;margin-bottom:0.75rem;">',
+        unsafe_allow_html=True
+    )
+    
+    if not s.project_loaded:
+        # Show upload prompt when no project is loaded
+        st.markdown(
+            '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            '<div style="font-family:var(--mono);font-size:0.75rem;color:var(--text);">'
+            '📁 Upload your Godot project ZIP to begin</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        uploaded = st.file_uploader("", type=["zip"], key="chat_main_upload",
+                                     label_visibility="collapsed")
+        if uploaded is not None:
+            key = _get_uploaded_file_key(uploaded)
+            if st.session_state.get("last_uploaded_file_key") != key:
+                success = _handle_upload(uploaded, s)
+                if success:
+                    st.session_state["last_uploaded_file_key"] = key
+                    st.rerun()
+    else:
+        # Show project status when project is loaded
+        stats = s.project_map.get("stats", {})
+        st.markdown(
+            '<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            f'<div style="font-family:var(--mono);font-size:0.7rem;color:var(--success);">'
+            f'✓ Project loaded</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--muted);">'
+            f'{stats.get("script_count", 0)} scripts</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--muted);">'
+            f'{stats.get("scene_count", 0)} scenes</div>',
+            unsafe_allow_html=True
+        )
+        issues = stats.get("total_issues", 0)
+        improvements = stats.get("total_improvements", 0)
+        if issues > 0:
+            st.markdown(
+                f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--danger);">'
+                f'{issues} issues</div>',
+                unsafe_allow_html=True
+            )
+        if improvements > 0:
+            st.markdown(
+                f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--warn);">'
+                f'{improvements} improvements</div>',
+                unsafe_allow_html=True
+            )
+        # Allow re-upload option
+        st.markdown(
+            '<div style="flex-grow:1;"></div>',
+            unsafe_allow_html=True
+        )
+        reupload = st.button("🔄 New Project", key="reupload_btn", 
+                            help="Upload a different project")
+        if reupload:
+            s.project_loaded = False
+            s.project_files = []
+            s.file_contents = {}
+            s.project_map = {}
+            s.active_file = None
+            st.session_state.pop("last_uploaded_file_key", None)
+            st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_area(
             "Message",
@@ -1034,26 +1114,10 @@ def _tab_chat():
             height=72,
             label_visibility="collapsed"
         )
-        c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+        c1, c2, c3 = st.columns([4, 1, 1])
         submitted = c1.form_submit_button("Send ↵", type="primary", use_container_width=True)
         gen_btn   = c2.form_submit_button("Generate", use_container_width=True)
         fix_btn   = c3.form_submit_button("Fix Errors", use_container_width=True)
-        upload_btn = c4.form_submit_button("＋ ZIP", use_container_width=True)
-
-    if upload_btn:
-        st.session_state["show_upload"] = not st.session_state.get("show_upload", False)
-        st.rerun()
-
-    if st.session_state.get("show_upload", False):
-        up2 = st.file_uploader("Upload ZIP", type=["zip"], key="chat_upload_inline")
-        if up2 is not None:
-            key = _get_uploaded_file_key(up2)
-            if st.session_state.get("last_uploaded_file_key") != key:
-                success = _handle_upload(up2, s)
-                if success:
-                    st.session_state["last_uploaded_file_key"] = key
-                    st.session_state["show_upload"] = False
-                    st.rerun()
 
     if submitted or gen_btn or fix_btn:
         if not user_input.strip():
