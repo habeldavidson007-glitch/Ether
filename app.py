@@ -604,6 +604,8 @@ const CONFIG = {{
     MAX_VELOCITY: 15,           // Cap node speed
     NODE_RADIUS: 12,            // Base node size
     SCENE_SIZE: 16,             // Scene node size (larger)
+    CHARGE_MIN: 200,            // Minimum charge magnitude
+    CHARGE_MAX: 600,            // Maximum charge magnitude
 }};
 
 // ── Three.js Setup ───────────────────────────────────────────────────────────
