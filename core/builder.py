@@ -1,79 +1,16 @@
 """
 Builder — The AI pipeline.
-Patched:
-  - _CHAT_SYSTEM now instructs model to use project context
-  - analyze intent routes to dedicated analyze pipeline
-  - chat_mode (coding/general/mixed) modifies system prompt
+NOTE: All OpenAI/OpenRouter API calls have been removed.
 """
 
 import json
 import re
-import requests
 from typing import Any, Dict, List, Optional, Tuple
 
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "minimax/minimax-m2.5:free"
-FALLBACK_MODELS = [
-    "nousresearch/hermes-3-llama-3.1-405b-instruct:free",
-]
-
-
 def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
-    if not api_key or not api_key.startswith("sk-or-"):
-        raise RuntimeError("Invalid OpenRouter API key. Get one at https://openrouter.ai/keys")
-
-    max_tokens = min(max_tokens, 800)
-
-    if not messages:
-        return "⚠ No input provided."
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/your-repo/ether",
-        "X-Title": "Ether",
-    }
-
-    # Try primary model first, then fallbacks
-    models_to_try = [DEFAULT_MODEL] + FALLBACK_MODELS
-    
-    for model in models_to_try:
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-        }
-        try:
-            r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
-            if not r.ok:
-                error_text = r.text[:300]
-                # If authentication fails, stop trying other models
-                if "Authentication failed" in error_text or "401" in error_text:
-                    return f"❌ API ERROR ({model}): Authentication failed. Check your OpenRouter API key."
-                # Continue to next model for other errors (rate limits, etc.)
-                continue
-                
-            data = r.json()
-            if "choices" not in data or len(data["choices"]) == 0:
-                continue
-                
-            content = data["choices"][0]["message"]["content"]
-            if not content:
-                continue
-                
-            return content.strip()
-            
-        except requests.exceptions.Timeout:
-            continue
-        except requests.exceptions.RequestException:
-            continue
-        except Exception:
-            continue
-    
-    # If all models failed, return last error
-    return f"❌ API ERROR: All models failed. Check your API key and try again."
+    """Placeholder - AI integration removed."""
+    return "⚠ AI integration has been removed. No API calls available."
 
 
 def _safe_json(text: str) -> Optional[Dict]:
