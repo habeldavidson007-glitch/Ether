@@ -1,10 +1,6 @@
 """
 Ether State — Single source of truth for session identity.
-
-Replaces: identity_engine, cognitive_controller, memory_system, todo_manager,
-          strategy_engine, intent_engine (all collapsed into one lean module).
-
-Design: flat, readable, no inheritance chains.
+Patched: classify() now returns 'analyze' for analysis queries.
 """
 
 import json
@@ -16,8 +12,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-
 MEMORY_CAP = 150
 MEMORY_TOP_K = 3
 SIM_THRESHOLD = 0.15
@@ -26,16 +20,16 @@ WORKSPACE = Path("workspace")
 MEMORY_FILE = WORKSPACE / "memory.json"
 
 
-# ── Intent Classification ──────────────────────────────────────────────────────
+# ── Intent Classification (PATCHED) ───────────────────────────────────────────
 
 _CASUAL = {"hi", "hey", "hello", "thanks", "ok", "okay", "cool", "great", "lol", "nice"}
 _DEBUG  = {"error", "crash", "fix", "bug", "broken", "fail", "exception", "traceback"}
 _BUILD  = {"create", "generate", "build", "make", "add", "write", "implement", "new"}
-_ANALYZE= {"analyze", "explain", "what", "how", "why", "understand", "review", "check"}
+_ANALYZE= {"analyze", "explain", "what", "how", "why", "understand", "review", "check",
+           "list", "find", "show", "tell", "describe", "issues", "problems", "look"}
 
 
 def is_casual(text: str) -> bool:
-    """Detect casual/conversational input that should NOT trigger build pipeline."""
     text = text.lower().strip()
 
     if len(text) < 6:
@@ -57,8 +51,7 @@ def is_casual(text: str) -> bool:
 
     if any(k in text for k in ["fix", "bug", "error", "debug"]):
         return False
-
-    if any(k in text for k in ["explain", "what", "how", "analyze", "why"]):
+    if any(k in text for k in ["explain", "what", "how", "analyze", "why", "list", "find", "issues"]):
         return False
 
     return any(p in text for p in casual_patterns)
@@ -66,18 +59,24 @@ def is_casual(text: str) -> bool:
 
 def classify(text: str) -> str:
     """Classify user intent. Returns: casual, debug, build, analyze, or task."""
-    text = text.lower()
+    text_lower = text.lower()
 
-    if any(k in text for k in ["fix", "bug", "error", "debug"]):
+    if any(k in text_lower for k in ["fix", "bug", "error", "debug", "crash", "broken", "fail"]):
         return "debug"
 
-    if any(k in text for k in ["build", "create", "make", "implement"]):
+    if any(k in text_lower for k in ["build", "create", "make", "implement", "generate", "write", "add"]):
         return "build"
+
+    # PATCH: catch analysis/review queries — these need real file context
+    if any(k in text_lower for k in ["analyze", "explain", "list", "find", "show", "what",
+                                      "how", "why", "review", "check", "issues", "problems",
+                                      "tell me", "describe", "look at", "read"]):
+        return "analyze"
 
     return "casual"
 
 
-# ── Memory (TF-IDF cosine, no external libs) ───────────────────────────────────
+# ── Memory ─────────────────────────────────────────────────────────────────────
 
 def _tokenize(text: str) -> List[str]:
     return [w for w in re.findall(r"[a-zA-Z_]\w*", text.lower()) if len(w) >= 3]
@@ -160,17 +159,14 @@ def remember(task: str, intent: str, success: bool, tags: List[str] = None) -> N
 
 @dataclass
 class EtherSession:
-    """
-    The identity layer. One instance per conversation.
-    Holds everything the pipeline needs to make decisions.
-    """
-    mode: str = "task"                          # current mode: task | casual | debug
+    mode: str = "task"
     history: List[Dict[str, str]] = field(default_factory=list)
     project_loaded: bool = False
     project_files: List[str] = field(default_factory=list)
     file_contents: Dict[str, str] = field(default_factory=dict)
     project_map: Dict[str, Any] = field(default_factory=dict)
     active_file: Optional[str] = None
+    chat_mode: str = "mixed"  # coding | general | mixed
     constraints: Dict[str, Any] = field(default_factory=lambda: {
         "max_history_turns": 20,
         "max_file_chars": 8000,
@@ -208,7 +204,6 @@ class EtherSession:
             return ""
         parts = []
         used = 0
-        # Active file first
         priority = []
         if self.active_file and self.active_file in self.file_contents:
             priority.append(self.active_file)
