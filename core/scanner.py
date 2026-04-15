@@ -40,13 +40,12 @@ _ISSUE_PATTERNS = [
 ]
 
 _IMPROVEMENT_PATTERNS = [
-    (r'var\s+\w+\s*=',            "consider @export or @onready for node refs"),
+    (r'^var\s+\w+\s*=\s*get_node', "consider @onready for node refs"),
     (r'func _process',            "check if _physics_process is more appropriate"),
-    (r'if\s+\w+\s*!=\s*null',     "consider is_instance_valid() for safety"),
+    (r'\bif\s+\w+\s*!=\s*null',     "consider is_instance_valid() for safety"),
     (r'#\s*TODO',                 "unresolved TODO comment"),
     (r'#\s*FIXME',                "unresolved FIXME comment"),
-    (r'magic_number\s*=\s*\d+',  "magic number — consider const"),
-    (r'^\s{8,}',                  "deep nesting — refactor candidate"),
+    (r'^\s{12,}',                  "very deep nesting — consider refactoring"),
 ]
 
 
