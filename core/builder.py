@@ -1,15 +1,9 @@
 """
-Builder — The AI pipeline. Three steps, no ceremony.
-
-  think  → understand the problem, identify what's needed
-  plan   → decide what files to touch and why
-  build  → generate complete working output
-
-Replaces: blackboard pipeline, parallel planners/executors/critics,
-          strategy_engine, router, evaluate_hypotheses, refine loop
-          (all 2000+ lines → ~200 lines here)
-
-Model: OpenRouter free tier (minimax-m2.5:free default, hermes fallback)
+Builder — The AI pipeline.
+Patched:
+  - _CHAT_SYSTEM now instructs model to use project context
+  - analyze intent routes to dedicated analyze pipeline
+  - chat_mode (coding/general/mixed) modifies system prompt
 """
 
 import json
@@ -17,8 +11,6 @@ import re
 import requests
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# ── API ─────────────────────────────────────────────────────────────────────────
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS = [
@@ -29,61 +21,46 @@ MODELS = [
 
 
 def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
-    """Hybrid routing with model priority. Returns response text or actual error message."""
-    
-    # Validate API key
     if not api_key or not api_key.startswith("sk-"):
         raise RuntimeError("Invalid OpenRouter API key.")
-    
-    # Cap tokens to prevent issues
+
     max_tokens = min(max_tokens, 800)
-    
-    # Ensure messages not empty
+
     if not messages:
         return "⚠ No input provided."
-    
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "http://localhost:8501",
         "X-Title": "Ether"
     }
-    
+
     last_error = None
-    
+
     for model_name in MODELS:
         print(f"[TRY] {model_name}")
-        
         payload = {
             "model": model_name,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0.3,
         }
-        
         try:
-            r2 = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
-            
-            if not r2.ok:
-                text = r2.text
-                
+            r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
+            if not r.ok:
+                text = r.text
                 if "429" in text:
-                    continue  # try next model
+                    continue
                 else:
                     return f"❌ API ERROR ({model_name}): {text[:200]}"
-            
-            data = r2.json()
-            
-            # Validate response structure
+            data = r.json()
             if "choices" not in data or len(data["choices"]) == 0:
                 return f"❌ API ERROR ({model_name}): No choices in response"
-            
             content = data["choices"][0]["message"]["content"]
             if not content:
                 return f"❌ API ERROR ({model_name}): Empty content"
-                
             return content.strip()
-            
         except requests.exceptions.Timeout:
             last_error = f"❌ EXCEPTION ({model_name}): Request timeout"
             continue
@@ -92,19 +69,16 @@ def _call(messages: List[Dict], api_key: str, max_tokens: int = 800) -> str:
             continue
         except Exception as e:
             return f"❌ EXCEPTION ({model_name}): {str(e)}"
-    
-    return "❌ ALL MODELS FAILED (router + fallback exhausted)"
+
+    return last_error or "❌ ALL MODELS FAILED"
 
 
 def _safe_json(text: str) -> Optional[Dict]:
-    """Extract first JSON object from text, tolerantly."""
-    # Strip markdown fences
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```", "", text)
     try:
         return json.loads(text.strip())
     except json.JSONDecodeError:
-        # Try to find first {...}
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if m:
             try:
@@ -125,6 +99,12 @@ Core rules:
 - Include type hints where helpful
 - Never hallucinate Unity, Unreal, or C# patterns
 - Generate COMPLETE files, never partial snippets"""
+
+_MODE_SUFFIX = {
+    "coding": "\n\nMode: CODING. Focus on code, scripts, and technical implementation. Be precise and direct.",
+    "general": "\n\nMode: GENERAL. Focus on concepts, design patterns, and high-level guidance. Explain clearly.",
+    "mixed": "\n\nMode: MIXED. Balance code and explanation based on what the question needs.",
+}
 
 _THINK_SYSTEM = _GODOT_SYSTEM + """
 
@@ -175,10 +155,13 @@ Rules for content:
 
 _DEBUG_SYSTEM = _GODOT_SYSTEM + """
 
-Your job: diagnose and fix the error.
+Your job: diagnose and fix the error using the ACTUAL CODE provided.
+You MUST reference specific file names, line patterns, and variable names from the code context.
+Do NOT give generic advice — analyze the real code.
+
 Output a JSON object:
 {
-  "root_cause": "what's actually wrong",
+  "root_cause": "specific issue found in the actual code",
   "changes": [
     {
       "file": "path/to/file.gd",
@@ -186,20 +169,35 @@ Output a JSON object:
       "content": "complete fixed file content"
     }
   ],
-  "explanation": "why this fix works",
+  "explanation": "why this specific fix works for this specific code",
   "prevention": "how to avoid this in future"
 }"""
 
+_ANALYZE_SYSTEM = _GODOT_SYSTEM + """
+
+Your job: analyze the ACTUAL PROJECT CODE provided and give specific findings.
+You MUST reference specific file names, function names, and line patterns found in the code.
+Do NOT give generic Godot advice — analyze what is actually in the files.
+
+Format your response as clear text with sections:
+- Reference specific files and functions you found
+- List concrete issues with file+function references
+- List improvements with specific suggestions
+- Prioritize by impact"""
+
+# PATCHED: explicitly instructs use of project context
 _CHAT_SYSTEM = _GODOT_SYSTEM + """
 
 You are in conversational mode. Be direct, helpful, and specific to Godot.
+CRITICAL: If project context is provided below, you MUST reference the actual files,
+functions, and code patterns found in that context. Never give generic advice when
+real code is available. Quote specific function names, variable names, and file paths.
 No JSON output — just clear, useful text."""
 
 
-# ── Pipeline ────────────────────────────────────────────────────────────────────
+# ── Pipeline Steps ──────────────────────────────────────────────────────────────
 
 def think(task: str, context: str, api_key: str) -> Dict:
-    """Step 1: Understand the problem."""
     messages = [
         {"role": "system", "content": _THINK_SYSTEM},
         {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context}"}
@@ -212,7 +210,6 @@ def think(task: str, context: str, api_key: str) -> Dict:
 
 
 def plan(task: str, thought: Dict, context: str, api_key: str) -> Dict:
-    """Step 2: Decide what to build."""
     messages = [
         {"role": "system", "content": _PLAN_SYSTEM},
         {"role": "user", "content": (
@@ -229,7 +226,6 @@ def plan(task: str, thought: Dict, context: str, api_key: str) -> Dict:
 
 
 def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str) -> Dict:
-    """Step 3: Generate complete working code."""
     messages = [
         {"role": "system", "content": _BUILD_SYSTEM},
         {"role": "user", "content": (
@@ -242,7 +238,6 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str)
     raw = _call(messages, api_key, max_tokens=3000)
     result = _safe_json(raw)
     if not result:
-        # Wrap raw response as a single file change
         result = {
             "changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}],
             "summary": "Generated (raw fallback — JSON parse failed)"
@@ -251,10 +246,9 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str, api_key: str)
 
 
 def debug(error_log: str, context: str, api_key: str) -> Dict:
-    """Single-step debug: diagnose + fix in one call."""
     messages = [
         {"role": "system", "content": _DEBUG_SYSTEM},
-        {"role": "user", "content": f"Error log:\n{error_log}\n\nCode context:\n{context}"}
+        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context}"}
     ]
     raw = _call(messages, api_key, max_tokens=2500)
     result = _safe_json(raw)
@@ -268,10 +262,26 @@ def debug(error_log: str, context: str, api_key: str) -> Dict:
     return result
 
 
-def chat(message: str, history: List[Dict], context: str, api_key: str) -> str:
-    """Conversational response — no JSON, just text."""
-    messages = [{"role": "system", "content": _CHAT_SYSTEM}]
-    # Inject limited history
+def analyze(task: str, context: str, history: List[Dict], api_key: str,
+            chat_mode: str = "mixed") -> str:
+    """PATCHED: dedicated analyze path — always injects full context."""
+    mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
+    system = _ANALYZE_SYSTEM + mode_suffix
+    messages = [{"role": "system", "content": system}]
+    for turn in history[-6:]:
+        messages.append(turn)
+    if context:
+        messages.append({"role": "user", "content": f"Task: {task}\n\nACTUAL PROJECT CODE:\n{context}"})
+    else:
+        messages.append({"role": "user", "content": task})
+    return _call(messages, api_key, max_tokens=800)
+
+
+def chat(message: str, history: List[Dict], context: str, api_key: str,
+         chat_mode: str = "mixed") -> str:
+    mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
+    system = _CHAT_SYSTEM + mode_suffix
+    messages = [{"role": "system", "content": system}]
     for turn in history[-8:]:
         messages.append(turn)
     if context:
@@ -285,13 +295,8 @@ def chat(message: str, history: List[Dict], context: str, api_key: str) -> str:
 
 def run_pipeline(task: str, intent: str, context: str,
                  history: List[Dict], api_key: str,
-                 yield_steps=None) -> Tuple[Dict, List[str]]:
-    """
-    Routes to the right pipeline based on intent.
-    
-    Returns: (result_dict, log_lines)
-    yield_steps: optional callable(step_name) for streaming UI updates
-    """
+                 yield_steps=None,
+                 chat_mode: str = "mixed") -> Tuple[Dict, List[str]]:
     log = []
 
     def step(name: str):
@@ -299,13 +304,18 @@ def run_pipeline(task: str, intent: str, context: str,
         if yield_steps:
             yield_steps(name)
 
-    # Safety fallback - ensure unknown intents default to casual
     if intent not in ["build", "debug", "casual", "analyze", "task"]:
         intent = "casual"
 
     if intent == "casual":
         step("💬 Thinking...")
-        text = chat(task, history, context, api_key)
+        text = chat(task, history, context, api_key, chat_mode=chat_mode)
+        return {"type": "chat", "text": text}, log
+
+    # PATCHED: analyze has dedicated path
+    if intent == "analyze":
+        step("🔬 Analyzing project...")
+        text = analyze(task, context, history, api_key, chat_mode=chat_mode)
         return {"type": "chat", "text": text}, log
 
     if intent == "debug":
@@ -314,7 +324,7 @@ def run_pipeline(task: str, intent: str, context: str,
         result["type"] = "debug"
         return result, log
 
-    # Build pipeline (build + analyze both use full 3-step)
+    # Build pipeline
     step("🧠 Understanding...")
     thought = think(task, context, api_key)
 
