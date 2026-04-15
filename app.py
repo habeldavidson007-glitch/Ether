@@ -429,7 +429,7 @@ def _build_graph_data(s: EtherSession) -> dict:
     Type values: "script", "scene"
     """
     if not s.project_loaded or not s.project_map:
-        return {"nodes": [], "links": []}
+        return {"nodes": [], "edges": []}
 
     pm = s.project_map
     nodes = []
