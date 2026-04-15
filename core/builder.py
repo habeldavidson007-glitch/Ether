@@ -14,7 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS = [
-    "openrouter/free",
+    "qwen/qwen3-coder:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-4b-it:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
     "minimax/minimax-m2.5:free",
     "nousresearch/hermes-3-llama-3.1-405b:free"
 ]
