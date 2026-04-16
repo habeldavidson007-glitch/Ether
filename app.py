@@ -372,9 +372,16 @@ def _apply_changes(changes: List[Dict], loader) -> tuple:
             # Reload project to pick up changes
             loader.file_index.clear()
             loader.content_cache.clear()
-            for path, content in updated.items():
-                loader._raw_file_contents[path] = content.encode('utf-8')
-                loader.file_index[path] = {"size": len(content), "ext": Path(path).suffix, "loaded": True}
+            for path, new_content in updated.items():
+                ext = Path(path).suffix
+                type_map = {".gd": "script", ".tscn": "scene", ".tres": "resource"}
+                loader._raw_file_contents[path] = new_content.encode('utf-8')
+                loader.file_index[path] = {
+                    "size": len(new_content),
+                    "ext": ext,
+                    "type": type_map.get(ext, "other"),
+                    "loaded": True,
+                }
         
         return ok, msg, updated
     except Exception as e:
@@ -526,36 +533,63 @@ def _tab_chat():
 
         task = user_input.strip()
 
-        if gen_btn:
-            intent = "build"
-        elif fix_btn:
-            intent = "debug"
+        # gen_btn / fix_btn force a specific intent and bypass EtherBrain routing.
+        # submitted uses EtherBrain's own intent detection (process_query).
+        if gen_btn or fix_btn:
+            forced_intent = "build" if gen_btn else "debug"
+            brain.add_to_history("user", task)
+
+            log_placeholder = st.empty()
+            steps_seen = []
+
+            def on_step_forced(name):
+                steps_seen.append(name)
+                badge_class = "badge-fast" if "Fast path" in name or "Cache hit" in name else "badge-info"
+                log_placeholder.markdown(
+                    " → ".join(f'<span class="badge {badge_class}">{n}</span>' for n in steps_seen),
+                    unsafe_allow_html=True
+                )
+
+            try:
+                from core.builder import run_pipeline
+                context = ""
+                if brain.project_loader:
+                    context = brain.project_loader.build_lightweight_context(task)
+                result, log = run_pipeline(
+                    task=task, intent=forced_intent, context=context,
+                    history=brain.history[-10:], chat_mode=brain.chat_mode,
+                    yield_steps=on_step_forced,
+                )
+                log_placeholder.empty()
+                _handle_result(result, task, brain)
+            except Exception as e:
+                log_placeholder.empty()
+                st.error(f"Pipeline error: {e}")
+                brain.add_to_history("assistant", f"Error: {e}")
+
         else:
-            # Intent detection now handled by EtherBrain.process_query()
-            pass
+            # Normal submit — EtherBrain routes by detected intent
+            brain.add_to_history("user", task)
 
-        brain.add_to_history("user", task)
+            log_placeholder = st.empty()
+            steps_seen = []
 
-        log_placeholder = st.empty()
-        steps_seen = []
+            def on_step(name):
+                steps_seen.append(name)
+                badge_class = "badge-fast" if "Fast path" in name or "Cache hit" in name else "badge-info"
+                log_placeholder.markdown(
+                    " → ".join(f'<span class="badge {badge_class}">{n}</span>' for n in steps_seen),
+                    unsafe_allow_html=True
+                )
 
-        def on_step(name):
-            steps_seen.append(name)
-            badge_class = "badge-fast" if "Fast path" in name or "Cache hit" in name else "badge-info"
-            log_placeholder.markdown(
-                " → ".join(f'<span class="badge {badge_class}">{n}</span>' for n in steps_seen),
-                unsafe_allow_html=True
-            )
-
-        try:
-            result, log = brain.process_query(task, yield_steps=on_step)
-            log_placeholder.empty()
-            _handle_result(result, task, brain)
-
-        except Exception as e:
-            log_placeholder.empty()
-            st.error(f"Pipeline error: {e}")
-            brain.add_to_history("assistant", f"Error: {e}")
+            try:
+                result, log = brain.process_query(task, yield_steps=on_step)
+                log_placeholder.empty()
+                _handle_result(result, task, brain)
+            except Exception as e:
+                log_placeholder.empty()
+                st.error(f"Pipeline error: {e}")
+                brain.add_to_history("assistant", f"Error: {e}")
 
 
 def _handle_result(result: dict, task: str, brain: EtherBrain):
@@ -582,6 +616,11 @@ def _handle_result(result: dict, task: str, brain: EtherBrain):
             previews = _preview_changes(changes, brain.project_loader)
             st.session_state["pending_changes"] = previews
             st.session_state["pending_raw"] = changes
+        try:
+            from core.state import remember
+            remember(task, "debug", bool(changes), tags=["debug"])
+        except Exception:
+            pass
         st.rerun()
         return
 
@@ -597,6 +636,12 @@ def _handle_result(result: dict, task: str, brain: EtherBrain):
             previews = _preview_changes(changes, brain.project_loader)
             st.session_state["pending_changes"] = previews
             st.session_state["pending_raw"] = changes
+        try:
+            from core.state import remember
+            tags = list(thought.get("missing", []))
+            remember(task, "build", bool(changes), tags=tags)
+        except Exception:
+            pass
         st.rerun()
         return
 
@@ -694,7 +739,7 @@ def _tab_settings():
     st.markdown("### Cached Intelligence Layer")
     cache_stats = brain.get_cache_stats()
     st.write(f"Current entries: {cache_stats['entries']}/{cache_stats['max_entries']}")
-    st.caption("Cache TTL: 5 minutes • Automatically evicts oldest entries")
+    st.caption("Cache TTL: 5 minutes • LRU eviction: least-recently-accessed entry removed when full")
     
     col1, col2 = st.columns(2)
     with col1:
