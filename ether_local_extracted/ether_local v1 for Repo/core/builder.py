@@ -38,10 +38,10 @@ def _call(messages: List[Dict], max_tokens: int = 200) -> str:
         "messages": messages,
         "stream": False,
         "options": {
-            "num_predict": 512,        # 🔥 Increased for better responses
-            "temperature": 0.3,        # 🔥 Slightly higher for creativity
-            "top_p": 0.85,
-            "repeat_penalty": 1.1,     # 🔥 Less repetitive
+            "num_predict": 384,        # 🔥 Optimized for speed/quality balance
+            "temperature": 0.4,        # 🔥 Better creativity for small model
+            "top_p": 0.9,
+            "repeat_penalty": 1.05,    # 🔥 Less restrictive
             "stop": ["User:", "Chatbot:", "Assistant:", "###", "\n\n"],
         },
     }
@@ -50,7 +50,7 @@ def _call(messages: List[Dict], max_tokens: int = 200) -> str:
         response = requests.post(
             OLLAMA_URL,
             json=payload,
-            timeout=120   # 🔥 Increased timeout for slower models
+            timeout=90   # 🔥 Optimized timeout
         )
 
         if response.status_code != 200:
@@ -214,11 +214,14 @@ No JSON output — just clear, useful text."""
 # ── Pipeline Steps ──────────────────────────────────────────────────────────────
 
 def think(task: str, context: str) -> Dict:
+    # Truncate context for thinking step
+    context_truncated = context[:1000] if len(context) > 1000 else context
+    
     messages = [
         {"role": "system", "content": _THINK_SYSTEM},
-        {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context}"}
+        {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context_truncated}"}
     ]
-    raw = _call(messages, max_tokens=600)
+    raw = _call(messages, max_tokens=400)  # Reduced for speed
     result = _safe_json(raw)
     if not result:
         result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
@@ -226,15 +229,19 @@ def think(task: str, context: str) -> Dict:
 
 
 def plan(task: str, thought: Dict, context: str) -> Dict:
+    # Truncate inputs for planning
+    context_truncated = context[:1000] if len(context) > 1000 else context
+    thought_str = json.dumps(thought, indent=2)[:400]
+    
     messages = [
         {"role": "system", "content": _PLAN_SYSTEM},
         {"role": "user", "content": (
             f"Task: {task}\n\n"
-            f"Analysis: {json.dumps(thought, indent=2)}\n\n"
-            f"Project context:\n{context}"
+            f"Analysis: {thought_str}\n\n"
+            f"Project context:\n{context_truncated}"
         )}
     ]
-    raw = _call(messages, max_tokens=800)
+    raw = _call(messages, max_tokens=600)  # Reduced for speed
     result = _safe_json(raw)
     if not result:
         result = {"files": [], "connections": [], "notes": raw[:200]}
@@ -242,16 +249,19 @@ def plan(task: str, thought: Dict, context: str) -> Dict:
 
 
 def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
+    # Truncate context heavily for build step
+    context_truncated = context[:1500] if len(context) > 1500 else context
+    
     messages = [
         {"role": "system", "content": _BUILD_SYSTEM},
         {"role": "user", "content": (
             f"Task: {task}\n\n"
-            f"Analysis: {json.dumps(thought, indent=2)}\n\n"
-            f"Plan: {json.dumps(blueprint, indent=2)}\n\n"
-            f"Existing code:\n{context}"
+            f"Analysis: {json.dumps(thought, indent=2)[:500]}\n\n"  # Truncate thought
+            f"Plan: {json.dumps(blueprint, indent=2)[:500]}\n\n"   # Truncate plan
+            f"Existing code:\n{context_truncated}"
         )}
     ]
-    raw = _call(messages, max_tokens=2048)
+    raw = _call(messages, max_tokens=1024)  # Reduced for speed
     result = _safe_json(raw)
     if not result:
         result = {
@@ -264,9 +274,9 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
 def debug(error_log: str, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _DEBUG_SYSTEM},
-        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context}"}
+        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1500]}"}  # Truncate context
     ]
-    raw = _call(messages, max_tokens=2048)
+    raw = _call(messages, max_tokens=1024)  # Reduced for speed
     result = _safe_json(raw)
     if not result:
         result = {
@@ -286,39 +296,33 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     
     # Add user message with context (if available)
     if context and len(context) > 0:
-        # Truncate context if too long for small model
-        max_context_len = 2000
+        # Truncate context aggressively for small model
+        max_context_len = 1200
         if len(context) > max_context_len:
             context = context[:max_context_len] + "\n...(truncated)"
         messages.append({"role": "user", "content": f"Task: {task}\n\nPROJECT CODE:\n{context}"})
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call(messages, max_tokens=512)
+    return _call(messages, max_tokens=384)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
-    # Expert persona system prompt
+    # Expert persona system prompt - LIGHTWEIGHT version for 0.5b
     persona = _EXPERT_PERSONAS.get(chat_mode, _EXPERT_PERSONAS["mixed"])
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
 
+    # Simplified system prompt for faster response
     system = _GODOT_SYSTEM + persona + mode_suffix + """
 
 You are helpful and conversational. Respond naturally to greetings like "hi", "hello", "whatsup".
 Be friendly but concise. Keep answers under 3 sentences for casual chat."""
 
-    # Build messages with limited history (last 2 turns to save tokens)
+    # Build messages with ONLY current message (no history to save tokens & speed)
     messages = [{"role": "system", "content": system}]
-    
-    # Add only the most recent exchange (user + assistant)
-    if len(history) >= 2:
-        messages.append(history[-2])  # Last user message
-        messages.append(history[-1])  # Last assistant response
-    
-    # Add current message
     messages.append({"role": "user", "content": message})
 
-    return _call(messages, max_tokens=384)
+    return _call(messages, max_tokens=256)
 
 def run_pipeline(task: str, intent: str, context: str,
                  history: List[Dict],
@@ -367,7 +371,8 @@ def run_pipeline(task: str, intent: str, context: str,
         # casual or default -> chat
         step("⚡ Quick response...")
         try:
-            text = chat(task, history, context, chat_mode=chat_mode)
+            # For chat, don't pass heavy context - just use history
+            text = chat(task, history[-4:] if len(history) >= 4 else history, "", chat_mode=chat_mode)
             return {"type": "chat", "text": text}, log
         except Exception as e:
             return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log

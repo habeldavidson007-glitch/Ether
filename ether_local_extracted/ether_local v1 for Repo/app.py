@@ -520,7 +520,7 @@ def _tab_chat():
                 task=task,
                 intent=intent,
                 context=context,
-                history=s.history[-10:],
+                history=s.history[-6:],  # 🔥 Reduced history for speed
                 yield_steps=on_step,
                 chat_mode=chat_mode,
             )
