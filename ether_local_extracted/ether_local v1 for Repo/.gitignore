@@ -3,22 +3,22 @@
 __pycache__/
 *.o
 *.obj
+*.out
 *.exe
 *.dll
 *.so
-*.class
-*.out
+*.a
 
 # Dependencies
 .venv/
 venv/
 node_modules/
+dist/
+build/
 target/
 .gradle/
 .mypy_cache/
 .pytest_cache/
-dist/
-build/
 
 # Logs and temp files
 *.log
