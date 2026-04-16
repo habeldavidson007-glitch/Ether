@@ -8,12 +8,13 @@ OPTIMIZATIONS IMPLEMENTED:
 1. INTENT-AWARE ROUTING: Detect simple intents (greetings, status) via regex and route
    to fast path with low token limits (64-192 tokens) and short timeouts (10s).
 2. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
-3. CACHED INTELLIGENCE: In-memory cache with TTL for repeated queries.
+3. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
+   Eviction policy: least-recently-accessed entry removed when capacity is full.
 
-Performance Targets:
-- Greetings respond in <2 seconds
-- RAM usage kept under 1.5GB
-- Cache hits return instantly (<100ms)
+Performance Notes:
+- Greetings/status/help bypass the LLM entirely (fast path via regex).
+- Repeated queries return from cache without calling Ollama.
+- Actual RAM/speed gains depend on hardware and project size; no specific numbers claimed.
 """
 
 import json
@@ -52,63 +53,73 @@ MAX_CACHE_ENTRIES = 50   # Limit cache size to prevent memory bloat
 class ResponseCache:
     """
     OPTIMIZATION #3: Cached Intelligence Layer
-    
-    Simple in-memory cache with TTL (Time-To-Live).
-    If the user asks the same question about the same project state,
-    return the cached answer instantly without calling Ollama.
-    
+
+    In-memory LRU cache with TTL (Time-To-Live).
+    Eviction policy: least-recently-accessed entry is removed when capacity is full.
+    Access time is updated on every successful get(), ensuring true LRU behaviour.
+
     Cache key includes:
     - Query text (normalized)
     - Intent type
     - Project fingerprint (based on file count and sizes)
     """
-    
+
     def __init__(self, ttl_seconds: int = CACHE_TTL_SECONDS, max_entries: int = MAX_CACHE_ENTRIES):
         self.ttl = ttl_seconds
         self.max_entries = max_entries
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._timestamps: Dict[str, float] = {}
-    
+        self._cache: Dict[str, Any] = {}
+        self._insert_time: Dict[str, float] = {}   # when entry was stored
+        self._access_time: Dict[str, float] = {}   # when entry was last read
+
     def _make_key(self, query: str, intent: str, project_fingerprint: str) -> str:
         """Create a unique cache key."""
-        normalized_query = ' '.join(query.lower().split())  # Normalize whitespace
+        normalized_query = ' '.join(query.lower().split())
         key_data = f"{normalized_query}|{intent}|{project_fingerprint}"
         return hashlib.md5(key_data.encode()).hexdigest()
-    
+
     def get(self, query: str, intent: str, project_fingerprint: str) -> Optional[Any]:
-        """Get cached response if valid."""
+        """Get cached response if still valid. Updates LRU access time."""
         key = self._make_key(query, intent, project_fingerprint)
-        
+
         if key not in self._cache:
             return None
-        
-        # Check TTL
-        if time.time() - self._timestamps.get(key, 0) > self.ttl:
-            # Expired, remove it
+
+        # Check TTL against insert time (not access time — stale data is still stale)
+        if time.time() - self._insert_time.get(key, 0) > self.ttl:
             self._cache.pop(key, None)
-            self._timestamps.pop(key, None)
+            self._insert_time.pop(key, None)
+            self._access_time.pop(key, None)
             return None
-        
+
+        # Update access time so this entry is treated as recently used
+        self._access_time[key] = time.time()
         return self._cache[key]
-    
+
     def set(self, query: str, intent: str, project_fingerprint: str, response: Any) -> None:
-        """Store response in cache."""
+        """Store response. Evicts least-recently-accessed entry when at capacity."""
         key = self._make_key(query, intent, project_fingerprint)
-        
-        # Evict oldest if at capacity
-        if len(self._cache) >= self.max_entries:
-            oldest_key = min(self._timestamps.keys(), key=lambda k: self._timestamps[k])
-            self._cache.pop(oldest_key, None)
-            self._timestamps.pop(oldest_key, None)
-        
+
+        # Evict LRU entry if at capacity (use access time, fall back to insert time)
+        if len(self._cache) >= self.max_entries and key not in self._cache:
+            lru_key = min(
+                self._cache.keys(),
+                key=lambda k: self._access_time.get(k, self._insert_time.get(k, 0))
+            )
+            self._cache.pop(lru_key, None)
+            self._insert_time.pop(lru_key, None)
+            self._access_time.pop(lru_key, None)
+
+        now = time.time()
         self._cache[key] = response
-        self._timestamps[key] = time.time()
-    
+        self._insert_time[key] = now
+        self._access_time[key] = now
+
     def clear(self) -> None:
         """Clear all cached entries."""
         self._cache.clear()
-        self._timestamps.clear()
-    
+        self._insert_time.clear()
+        self._access_time.clear()
+
     def stats(self) -> Dict[str, int]:
         """Get cache statistics."""
         return {
