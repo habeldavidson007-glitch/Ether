@@ -31,30 +31,54 @@ _ANALYZE= {"analyze", "explain", "what", "how", "why", "understand", "review", "
 
 def is_casual(text: str) -> bool:
     text = text.lower().strip()
-
-    if len(text) < 6:
-        if any(k in text for k in ["fix", "bug", "error"]):
-            return False
-        if any(k in text for k in ["explain", "what", "how"]):
-            return False
+    
+    # Very short greetings are always casual
+    if len(text) <= 4:
         return True
 
-    casual_patterns = [
-        "hi", "hello", "hey", "yo",
-        "thanks", "thank you",
-        "congrats", "congratulations",
-        "lol", "lmao", "haha",
-        "how are you",
-        "good morning", "good night",
-        "nice", "cool"
+    # "whatsup" variants MUST be checked first - they are ALWAYS casual
+    if "whatsup" in text or "whats up" in text or "what's up" in text:
+        return True
+    
+    # Explicit non-casual keywords (check second) - these override everything else
+    non_casual_keywords = [
+        "fix", "bug", "error", "debug", "crash",
+        "explain", "analyze", "review", "check",
+        "list", "find", "show me", "tell me", "describe",
+        "issues", "problems", "implement", "create",
+        "build", "generate", "write code", "add feature",
+        "think of", "opinion on", "feedback on"
     ]
-
-    if any(k in text for k in ["fix", "bug", "error", "debug"]):
+    
+    if any(k in text for k in non_casual_keywords):
         return False
-    if any(k in text for k in ["explain", "what", "how", "analyze", "why", "list", "find", "issues"]):
-        return False
+    
+    # Casual patterns - expanded
+    casual_patterns = [
+        "hi", "hello", "hey", "yo", "sup", 
+        "thanks", "thank you", "thx",
+        "congrats", "congratulations",
+        "lol", "lmao", "haha", "rofl",
+        "how are you", "how's it going",
+        "good morning", "good night", "good day",
+        "nice", "cool", "great", "awesome",
+        "ok", "okay", "sure", "yeah", "yep",
+        "bye", "see you", "later",
+        "whatcha", "greetings", "g'day"
+    ]
+    
+    # Check for exact casual patterns
+    if any(p in text for p in casual_patterns):
+        return True
+    
+    # Short conversational phrases (2-3 words) without technical/game keywords
+    words = text.split()
+    if len(words) <= 3:
+        technical_words = ["game", "code", "script", "project", "player", "enemy", "level"]
+        if not any(k in text for k in technical_words):
+            return True
 
-    return any(p in text for p in casual_patterns)
+    return False
 
 
 def classify(text: str) -> str:

@@ -1,10 +1,8 @@
-```
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
+# Dependencies
+node_modules/
+__pycache__/
+.venv/
+venv/
 .env
 .env.local
 .env.*
@@ -13,60 +11,40 @@
 .vscode/
 .idea/
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
+# System
 .DS_Store
 Thumbs.db
 
-# Build and distribution artifacts
+# Logs
+*.log
+
+# Build artifacts
 dist/
 build/
-*.egg-info/
-.eggs/
-.installed.cfg
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg
-*.zip
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
+target/
+*.pyc
+*.class
+*.o
+*.exe
+*.dll
+*.so
+*.a
+*.obj
+*.out
 
-# Testing
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
-cover/
+# Coverage
+coverage/
 htmlcov/
+.coverage
 
-# IDE specific
+# Temp files
+*.tmp
 *.swp
 *.swo
-*~
-.project
-.classpath
-.settings/
-.storeversions
-```
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+.gradle/
+julia-*/
+zig*/

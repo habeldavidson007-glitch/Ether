@@ -295,26 +295,24 @@ def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixe
     # Expert persona system prompt
     persona = _EXPERT_PERSONAS.get(chat_mode, _EXPERT_PERSONAS["mixed"])
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
-    
+
     system = _GODOT_SYSTEM + persona + mode_suffix + """
 
-Rules:
-- Only answer based on the user's LAST message.
-- Do NOT assume any previous topic.
-- Do NOT continue unrelated text.
-- Keep answers short and relevant.
-- If user says 'hi', just greet back normally.
-- No rambling. No hallucination.
-"""
+You are helpful and conversational. Respond naturally to greetings and questions.
+Keep answers concise but friendly."""
 
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": message}  # 🔥 ONLY LAST MESSAGE
-    ]
+    # Build messages with limited history (last 4 turns to save tokens)
+    messages = [{"role": "system", "content": system}]
+    
+    # Add recent history (last 4 exchanges = 8 messages max)
+    recent_history = history[-4:] if len(history) > 4 else history
+    for turn in recent_history:
+        messages.append(turn)
+    
+    # Add current message
+    messages.append({"role": "user", "content": message})
 
-    return _call(messages, max_tokens=200)
-
-# ── Full Pipeline Entry Point ───────────────────────────────────────────────────
+    return _call(messages, max_tokens=256)
 
 def run_pipeline(task: str, intent: str, context: str,
                  history: List[Dict],
@@ -329,12 +327,41 @@ def run_pipeline(task: str, intent: str, context: str,
         if yield_steps:
             yield_steps(name)
 
-    # 🔥 SIMPLE MODE (SAFE)
-    step("⚡ Quick response...")
-
-    try:
-        text = chat(task, history, context, chat_mode=chat_mode)
-        return {"type": "chat", "text": text}, log
-
-    except Exception as e:
-        return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
+    # Route based on intent
+    if intent == "analyze":
+        step("🔍 Analyzing project...")
+        try:
+            text = analyze(task, context, history, chat_mode=chat_mode)
+            return {"type": "chat", "text": text}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
+    
+    elif intent == "debug":
+        step("🔧 Debugging...")
+        try:
+            result = debug(task, context)
+            return {"type": "debug", **result}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
+    
+    elif intent == "build":
+        step("🏗 Building...")
+        try:
+            thought = think(task, context)
+            step("Thinking...")
+            blueprint = plan(task, thought, context)
+            step("Planning...")
+            result = build(task, thought, blueprint, context)
+            step("Building...")
+            return {"type": "build", "thought": thought, **result}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+    
+    else:
+        # casual or default -> chat
+        step("⚡ Quick response...")
+        try:
+            text = chat(task, history, context, chat_mode=chat_mode)
+            return {"type": "chat", "text": text}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
