@@ -17,7 +17,7 @@ def _call(messages: List[Dict], max_tokens: int = 200) -> str:
     if not messages:
         return "⚠ No input provided."
 
-    # 🔥 ONLY system + last user
+    # 🔥 ONLY system + last user (to save context window)
     system_msg = None
     user_msg = None
 
@@ -38,11 +38,11 @@ def _call(messages: List[Dict], max_tokens: int = 200) -> str:
         "messages": messages,
         "stream": False,
         "options": {
-            "num_predict": 96,         # 🔥 FIX: ga kepotong lagi
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "repeat_penalty": 1.15,    # 🔥 smoother
-            "stop": ["User:", "Chatbot:", "Assistant:", "###"],
+            "num_predict": 512,        # 🔥 Increased for better responses
+            "temperature": 0.3,        # 🔥 Slightly higher for creativity
+            "top_p": 0.85,
+            "repeat_penalty": 1.1,     # 🔥 Less repetitive
+            "stop": ["User:", "Chatbot:", "Assistant:", "###", "\n\n"],
         },
     }
 
@@ -50,11 +50,11 @@ def _call(messages: List[Dict], max_tokens: int = 200) -> str:
         response = requests.post(
             OLLAMA_URL,
             json=payload,
-            timeout=60   # 🔥 jangan terlalu lama
+            timeout=120   # 🔥 Increased timeout for slower models
         )
 
         if response.status_code != 200:
-            return f"❌ Ollama error {response.status_code}: {response.text}"
+            return f"❌ Ollama error {response.status_code}: {response.text[:200]}"
 
         data = response.json()
         content = data.get("message", {}).get("content", "").strip()
@@ -70,10 +70,10 @@ def _call(messages: List[Dict], max_tokens: int = 200) -> str:
         return content
 
     except requests.exceptions.Timeout:
-        return "❌ Timeout (model too slow). Try shorter input."
+        return "❌ Timeout (model too slow). Try shorter input or restart Ollama."
 
     except requests.exceptions.ConnectionError:
-        return "❌ Ollama not running."
+        return "❌ Ollama not running. Start with: ollama serve"
 
     except Exception as e:
         return f"❌ Error: {str(e)}"
@@ -279,16 +279,22 @@ def debug(error_log: str, context: str) -> Dict:
 
 
 def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixed") -> str:
+    """Analyze project with context - optimized for local models."""
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
     system = _ANALYZE_SYSTEM + mode_suffix
     messages = [{"role": "system", "content": system}]
-    for turn in history[-6:]:
-        messages.append(turn)
-    if context:
-        messages.append({"role": "user", "content": f"Task: {task}\n\nACTUAL PROJECT CODE:\n{context}"})
+    
+    # Add user message with context (if available)
+    if context and len(context) > 0:
+        # Truncate context if too long for small model
+        max_context_len = 2000
+        if len(context) > max_context_len:
+            context = context[:max_context_len] + "\n...(truncated)"
+        messages.append({"role": "user", "content": f"Task: {task}\n\nPROJECT CODE:\n{context}"})
     else:
         messages.append({"role": "user", "content": task})
-    return _call(messages, max_tokens=800)
+    
+    return _call(messages, max_tokens=512)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
@@ -298,21 +304,21 @@ def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixe
 
     system = _GODOT_SYSTEM + persona + mode_suffix + """
 
-You are helpful and conversational. Respond naturally to greetings and questions.
-Keep answers concise but friendly."""
+You are helpful and conversational. Respond naturally to greetings like "hi", "hello", "whatsup".
+Be friendly but concise. Keep answers under 3 sentences for casual chat."""
 
-    # Build messages with limited history (last 4 turns to save tokens)
+    # Build messages with limited history (last 2 turns to save tokens)
     messages = [{"role": "system", "content": system}]
     
-    # Add recent history (last 4 exchanges = 8 messages max)
-    recent_history = history[-4:] if len(history) > 4 else history
-    for turn in recent_history:
-        messages.append(turn)
+    # Add only the most recent exchange (user + assistant)
+    if len(history) >= 2:
+        messages.append(history[-2])  # Last user message
+        messages.append(history[-1])  # Last assistant response
     
     # Add current message
     messages.append({"role": "user", "content": message})
 
-    return _call(messages, max_tokens=256)
+    return _call(messages, max_tokens=384)
 
 def run_pipeline(task: str, intent: str, context: str,
                  history: List[Dict],
