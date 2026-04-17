@@ -740,6 +740,7 @@ def _tab_settings():
     cache_stats = brain.get_cache_stats()
     st.write(f"Current entries: {cache_stats['entries']}/{cache_stats['max_entries']}")
     st.caption("Cache TTL: 5 minutes • LRU eviction: least-recently-accessed entry removed when full")
+    st.info("🔀 **Distributed Analysis:** Complex analysis splits into 3 micro-calls (Overview → Deep Dive → Recommendations) to reduce timeouts on low-RAM hardware.")
     
     col1, col2 = st.columns(2)
     with col1:
