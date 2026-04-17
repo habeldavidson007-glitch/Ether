@@ -477,13 +477,13 @@ No JSON output — just clear, useful text."""
 
 def think(task: str, context: str) -> Dict:
     # Truncate context for thinking step
-    context_truncated = context[:1000] if len(context) > 1000 else context
+    context_truncated = context[:600] if len(context) > 600 else context
     
     messages = [
         {"role": "system", "content": _THINK_SYSTEM},
         {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context_truncated}"}
     ]
-    raw = _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_NORMAL)
+    raw = _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_FAST)
     result = _safe_json(raw)
     if not result:
         result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
@@ -492,8 +492,8 @@ def think(task: str, context: str) -> Dict:
 
 def plan(task: str, thought: Dict, context: str) -> Dict:
     # Truncate inputs for planning
-    context_truncated = context[:1000] if len(context) > 1000 else context
-    thought_str = json.dumps(thought, indent=2)[:400]
+    context_truncated = context[:600] if len(context) > 600 else context
+    thought_str = json.dumps(thought, indent=2)[:300]
     
     messages = [
         {"role": "system", "content": _PLAN_SYSTEM},
@@ -512,14 +512,14 @@ def plan(task: str, thought: Dict, context: str) -> Dict:
 
 def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
     # Truncate context heavily for build step
-    context_truncated = context[:1500] if len(context) > 1500 else context
+    context_truncated = context[:1000] if len(context) > 1000 else context
     
     messages = [
         {"role": "system", "content": _BUILD_SYSTEM},
         {"role": "user", "content": (
             f"Task: {task}\n\n"
-            f"Analysis: {json.dumps(thought, indent=2)[:500]}\n\n"  # Truncate thought
-            f"Plan: {json.dumps(blueprint, indent=2)[:500]}\n\n"   # Truncate plan
+            f"Analysis: {json.dumps(thought, indent=2)[:400]}\n\n"  # Truncate thought
+            f"Plan: {json.dumps(blueprint, indent=2)[:400]}\n\n"   # Truncate plan
             f"Existing code:\n{context_truncated}"
         )}
     ]
@@ -536,7 +536,7 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
 def debug(error_log: str, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _DEBUG_SYSTEM},
-        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1500]}"}  # Truncate context
+        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1000]}"}  # Truncate context
     ]
     raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
@@ -559,14 +559,14 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     # Add user message with context (if available)
     if context and len(context) > 0:
         # Truncate context aggressively for small model
-        max_context_len = 1200
+        max_context_len = 800
         if len(context) > max_context_len:
             context = context[:max_context_len] + "\n...(truncated)"
         messages.append({"role": "user", "content": f"Task: {task}\n\nPROJECT CODE:\n{context}"})
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_SLOW)
+    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
@@ -577,10 +577,9 @@ def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixe
     # Simplified system prompt for faster response
     system = _GODOT_SYSTEM + persona + mode_suffix + """
 
-You are helpful and conversational. Respond naturally to greetings like "hi", "hello", "whatsup".
-Be friendly but concise. Keep answers under 3 sentences for casual chat."""
+You are helpful and conversational. Be friendly but concise."""
 
-    # Build messages with ONLY current message (no history to save tokens & speed)
+    # Build messages with ONLY current message (no context to save tokens & speed)
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": message})
 
@@ -777,11 +776,11 @@ class EtherBrain:
             if self.project_loader:
                 step("📂 Loading relevant files...")
                 if complex_intent == 'analyze':
-                    # For analysis, load more context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=4000)
+                    # For analysis, load moderate context (reduced for small model)
+                    context = self.project_loader.build_lightweight_context(query, max_chars=2000)
                 else:
                     # For other tasks, load minimal context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=2000)
+                    context = self.project_loader.build_lightweight_context(query, max_chars=1500)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
@@ -824,11 +823,11 @@ class EtherBrain:
                     return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
             
             else:
-                # Default to chat
+                # Default to chat - don't pass heavy context for casual chat
                 step("💬 Chatting...")
                 try:
                     text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
-                               context, chat_mode=self.chat_mode)
+                               "", chat_mode=self.chat_mode)
                     # Cache chat responses too
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log
@@ -850,12 +849,13 @@ class EtherBrain:
         if any(k in query_lower for k in ["create", "make", "implement", "generate", "write", "add", "build", "new"]):
             return "build"
         
-        # Analyze keywords
-        if any(k in query_lower for k in ["analyze", "explain", "list", "find", "show", "what", "how", 
-                                           "why", "review", "check", "issues", "problems", "describe"]):
+        # Analyze keywords - be more specific to avoid catching casual questions
+        if any(k in query_lower for k in ["analyze", "list", "find", "show", "review", "check", 
+                                           "issues", "problems", "describe", "what do you think", 
+                                           "how is my", "rate my", "feedback on"]):
             return "analyze"
         
-        # Default to chat
+        # Default to chat for general questions
         return "chat"
     
     def _get_memory_context(self, query: str) -> str:

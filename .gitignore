@@ -1,1 +1,36 @@
-Nothing should be ignored based on the provided file changes. The modification of 'core/builder.py' represents a source code file change, which does not warrant any new gitignore entries according to the specified rules.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Compiled and build artifacts
+*.o
+*.obj
+*.out
+*.so
+*.dll
+*.exe
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+.mypy_cache/
+.pytest_cache/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
+*.env.*
+```
