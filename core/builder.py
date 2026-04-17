@@ -1,6 +1,6 @@
 """
-Ether v1.3 — AI Pipeline with Intent-Aware Routing, Lazy Loading & Cached Intelligence
-=======================================================================================
+Ether v1.4 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
+=========================================================================================
 Model: qwen2.5:3b-instruct-q4_K_M (fits 4GB RAM)
 No API key. No internet required.
 
@@ -10,10 +10,13 @@ OPTIMIZATIONS IMPLEMENTED:
 2. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
 3. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
    Eviction policy: least-recently-accessed entry removed when capacity is full.
+4. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
+   using TF-IDF vectorization and chunked document indexing.
 
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
 - Repeated queries return from cache without calling Ollama.
+- RAG context retrieval dramatically improves analysis quality by loading precise code snippets.
 - Actual RAM/speed gains depend on hardware and project size; no specific numbers claimed.
 """
 
@@ -30,7 +33,7 @@ from functools import lru_cache
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:3b-instruct-q4_K_M"
+DEFAULT_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"  # Upgraded for better code analysis
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat

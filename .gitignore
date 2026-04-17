@@ -6,21 +6,45 @@ __pycache__/
 # Dependencies
 .venv/
 venv/
+node_modules/
+*.egg-info/
+dist/
+build/
+target/
+.gradle/
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
+*.swo
 
 # Environment
 .env
 .env.local
-*.env.*
+.env.*
 
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Original rules preserved
-*.log
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Python specific
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.so
+*.dylib
+*.dll
+
+# System files
+.DS_Store
+Thumbs.db
 ```

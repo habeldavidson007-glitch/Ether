@@ -363,7 +363,32 @@ class LazyProjectLoader:
         """
         Build context string for AI by loading only relevant files.
         This is the key optimization: don't load everything, just what's needed.
+        
+        ENHANCED v1.4: Uses RAG-based semantic search for better relevance matching.
         """
+        # Try RAG-based retrieval first (more precise)
+        try:
+            from core.rag_engine import RAGIndex
+            
+            # Get all loaded content for RAG indexing
+            file_contents = {}
+            for path in self.get_all_paths():
+                content = self.get_content(path)
+                if content:
+                    file_contents[path] = content
+            
+            if file_contents:
+                rag_index = RAGIndex()
+                rag_index.build_index(file_contents)
+                rag_context = rag_index.get_context_for_query(query, max_chars)
+                
+                if rag_context:
+                    return rag_context
+        except Exception:
+            # Fallback to simple keyword matching if RAG fails
+            pass
+        
+        # Fallback: Use original keyword-based retrieval
         relevant_paths = self.find_relevant_files(query)
         
         parts = []
