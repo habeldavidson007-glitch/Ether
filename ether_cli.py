@@ -50,7 +50,9 @@ class EtherCLI:
     
     def load_project(self, path: str) -> bool:
         """Load a Godot project from directory."""
-        project_dir = Path(path)
+        # Remove quotes if present
+        path = path.strip('"').strip("'")
+        project_dir = Path(path).expanduser().resolve()
         
         if not project_dir.exists():
             print(f"❌ Error: Directory '{path}' does not exist.")
@@ -65,26 +67,32 @@ class EtherCLI:
         if not project_file.exists():
             print(f"⚠ Warning: No 'project.godot' found. This might not be a Godot project.")
         
-        # Use the brain's project loader
+        # Use LazyProjectLoader (the only available loader)
         try:
-            from utils.project_loader import GodotProjectLoader
+            from utils.project_loader import LazyProjectLoader
             
-            loader = GodotProjectLoader(project_dir)
-            loader.scan()
+            loader = LazyProjectLoader()
+            success, msg = loader.load_from_folder(project_dir)
             
-            self.brain.project_loader = loader
-            self.brain.project_stats = loader.get_stats()
-            self.project_path = str(project_dir.absolute())
-            
-            stats = self.brain.project_stats
-            print(f"\n✓ Project loaded: {stats['script_count']} scripts, {stats['scene_count']} scenes")
-            print(f"  Path: {self.project_path}")
-            print(f"  (Lazy loaded - files read on demand)\n")
-            
-            return True
-            
+            if success:
+                self.brain.project_loader = loader
+                self.brain.project_stats = loader.get_stats()
+                self.project_path = str(project_dir.absolute())
+                
+                stats = self.brain.project_stats
+                print(f"\n✓ Project loaded: {stats['script_count']} scripts, {stats['scene_count']} scenes")
+                print(f"  Path: {self.project_path}")
+                print(f"  (Lazy loaded - files read on demand)\n")
+                
+                return True
+            else:
+                print(f"❌ Error loading project: {msg}")
+                return False
+                    
         except Exception as e:
             print(f"❌ Error loading project: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def show_status(self):
@@ -193,8 +201,8 @@ class EtherCLI:
         """Send query to Ether and display response."""
         start_time = time.time()
         
-        # Get response from brain
-        response = self.brain.chat(query)
+        # Get response from brain using process_query
+        result, log = self.brain.process_query(query)
         
         elapsed = time.time() - start_time
         
@@ -202,13 +210,20 @@ class EtherCLI:
         print(f"\n{'ETHER':<10} [{elapsed:.1f}s]")
         print("-" * 60)
         
-        # Handle streaming-like output for long responses
+        # Extract text from result
+        response = result.get("text", "No response generated.")
+        
+        # Display response
         lines = response.split('\n')
         for i, line in enumerate(lines):
             if i > 0 and i % 20 == 0:
                 # Pause for very long responses
                 time.sleep(0.1)
             print(line)
+        
+        # Add to history
+        self.brain.history.append({"role": "user", "content": query})
+        self.brain.history.append({"role": "assistant", "content": response})
         
         print()
     
