@@ -483,7 +483,7 @@ def think(task: str, context: str) -> Dict:
         {"role": "system", "content": _THINK_SYSTEM},
         {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context_truncated}"}
     ]
-    raw = _call(messages, max_tokens=400)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_NORMAL)
     result = _safe_json(raw)
     if not result:
         result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
@@ -503,7 +503,7 @@ def plan(task: str, thought: Dict, context: str) -> Dict:
             f"Project context:\n{context_truncated}"
         )}
     ]
-    raw = _call(messages, max_tokens=600)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
     result = _safe_json(raw)
     if not result:
         result = {"files": [], "connections": [], "notes": raw[:200]}
@@ -523,7 +523,7 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
             f"Existing code:\n{context_truncated}"
         )}
     ]
-    raw = _call(messages, max_tokens=1024)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -538,7 +538,7 @@ def debug(error_log: str, context: str) -> Dict:
         {"role": "system", "content": _DEBUG_SYSTEM},
         {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1500]}"}  # Truncate context
     ]
-    raw = _call(messages, max_tokens=1024)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -566,7 +566,7 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call(messages, max_tokens=384)
+    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_SLOW)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
@@ -584,7 +584,7 @@ Be friendly but concise. Keep answers under 3 sentences for casual chat."""
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": message})
 
-    return _call(messages, max_tokens=256)
+    return _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_NORMAL)
 
 def run_pipeline(task: str, intent: str, context: str,
                  history: List[Dict],
