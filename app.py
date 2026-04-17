@@ -9,7 +9,7 @@ OPTIMIZATIONS:
 3. Cached Intelligence: Repeated queries return instantly from cache
 
 Run: streamlit run app.py
-Requires: ollama serve && ollama pull qwen2.5:0.5b
+Requires: ollama serve && ollama pull qwen2.5:3b-instruct-q4_K_M
 """
 
 import streamlit as st
@@ -773,9 +773,9 @@ def _tab_settings():
     st.divider()
     st.markdown("### 🤖 Model Configuration")
     st.markdown("""
-    - **Model:** qwen2.5:0.5b (Ollama)
-    - **Context Window:** Optimized for 4GB RAM
-    - **Timeout:** 10s (fast) / 30s (normal) / 90s (slow)
+    - **Model:** qwen2.5:3b-instruct-q4_K_M (Ollama)
+    - **Context Window:** Optimized for better reasoning
+    - **Timeout:** 15s (fast) / 60s (normal) / 120s (slow)
     """)
 
 

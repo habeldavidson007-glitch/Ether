@@ -1,12 +1,12 @@
 """
 Ether v1.3 — AI Pipeline with Intent-Aware Routing, Lazy Loading & Cached Intelligence
 =======================================================================================
-Model: qwen2.5:0.5b (fits 4GB RAM)
+Model: qwen2.5:3b-instruct-q4_K_M (recommended for better reasoning)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
 1. INTENT-AWARE ROUTING: Detect simple intents (greetings, status) via regex and route
-   to fast path with low token limits (64-192 tokens) and short timeouts (10s).
+   to fast path with appropriate token limits and timeouts.
 2. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
 3. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
    Eviction policy: least-recently-accessed entry removed when capacity is full.
@@ -30,18 +30,18 @@ from functools import lru_cache
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:0.5b"
+DEFAULT_MODEL = "qwen2.5:3b-instruct-q4_K_M"
 
 # Timeout settings based on intent
-TIMEOUT_FAST = 10    # For greetings, simple chat
-TIMEOUT_NORMAL = 30  # For analysis
-TIMEOUT_SLOW = 90    # For code generation, debugging
+TIMEOUT_FAST = 15    # For greetings, simple chat
+TIMEOUT_NORMAL = 60  # For analysis
+TIMEOUT_SLOW = 120   # For code generation, debugging
 
 # Token limits based on intent
-MAX_TOKENS_FAST = 64     # Greetings, simple responses
-MAX_TOKENS_CHAT = 192    # General conversation
-MAX_TOKENS_ANALYZE = 384 # Analysis tasks
-MAX_TOKENS_BUILD = 1024  # Code generation
+MAX_TOKENS_FAST = 128    # Greetings, simple responses
+MAX_TOKENS_CHAT = 512    # General conversation
+MAX_TOKENS_ANALYZE = 768 # Analysis tasks
+MAX_TOKENS_BUILD = 1536  # Code generation
 
 # Cache settings
 CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
@@ -234,7 +234,7 @@ def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = N
 def _call(messages: List[Dict], max_tokens: int = 200, timeout: int = TIMEOUT_NORMAL) -> str:
     """
     Call Ollama API with configurable token limit and timeout.
-    Optimized for qwen2.5:0.5b model.
+    Optimized for qwen2.5:3b-instruct-q4_K_M model.
     """
     if not messages:
         return "⚠ No input provided."
@@ -530,11 +530,11 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
-    # Expert persona system prompt - LIGHTWEIGHT version for 0.5b
+    # Expert persona system prompt - optimized for qwen2.5:3b-instruct-q4_K_M
     persona = _EXPERT_PERSONAS.get(chat_mode, _EXPERT_PERSONAS["mixed"])
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
 
-    # Simplified system prompt for faster response
+    # System prompt with conversational instructions
     system = _GODOT_SYSTEM + persona + mode_suffix + """
 
 You are helpful and conversational. Respond naturally to greetings like "hi", "hello", "whatsup".
@@ -804,9 +804,10 @@ class EtherBrain:
         if any(k in query_lower for k in ["create", "make", "implement", "generate", "write", "add", "build", "new"]):
             return "build"
         
-        # Analyze keywords
+        # Analyze keywords - expanded to catch more analytical queries
         if any(k in query_lower for k in ["analyze", "explain", "list", "find", "show", "what", "how", 
-                                           "why", "review", "check", "issues", "problems", "describe"]):
+                                           "why", "review", "check", "issues", "problems", "describe",
+                                           "think of", "opinion", "feedback", "evaluate", "assess"]):
             return "analyze"
         
         # Default to chat
