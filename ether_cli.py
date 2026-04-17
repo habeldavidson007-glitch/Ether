@@ -1,5 +1,5 @@
 """
-Ether v1.6 — Godot AI Development Assistant (CLI Edition)
+Ether v1.7 — Godot AI Development Assistant (CLI Edition)
 ==========================================================
 Full local mode: No Streamlit, no browser, pure terminal interface.
 OPTIMIZATIONS:
@@ -7,11 +7,11 @@ OPTIMIZATIONS:
 2. Lazy Loading: Project files loaded on-demand, not all at once
 3. Cached Intelligence: Repeated queries return instantly from cache
 4. RAG-Enhanced Context: Semantic search retrieves relevant code snippets
-5. Ultra-Lightweight: qwen2.5:0.5b fits 4GB RAM systems (~500MB model)
+5. Balanced Model: qwen2.5-coder:3b-q3_K_S for better reasoning (~2.1GB)
 6. CLI Native: Zero web framework overhead, minimal memory footprint
 
 Run: python ether_cli.py
-Requires: ollama serve && ollama pull qwen2.5:0.5b-instruct-q4_K_M
+Requires: ollama serve && ollama pull qwen2.5-coder:3b-instruct-q3_K_S
 """
 
 import sys
@@ -34,10 +34,11 @@ class EtherCLI:
         
         # Welcome message
         print("\n" + "=" * 70)
-        print("  ◈ ETHER v1.6 CLI — Godot AI Development Assistant")
+        print("  ◈ ETHER v1.7 CLI — Godot AI Development Assistant")
         print("=" * 70)
         print("\n  Local • Private • Optimized for 4GB RAM")
-        print("  Model: qwen2.5:0.5b-instruct-q4_K_M")
+        print("  Model: qwen2.5-coder:3b-instruct-q3_K_S (~2.1GB)")
+        print("\n  ⚠ IMPORTANT: Close other apps to free RAM for the 3B model!")
         print("\n  Commands:")
         print("    /load <path>   — Load Godot project folder")
         print("    /status        — Show project stats")

@@ -1,7 +1,7 @@
 """
-Ether v1.5 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
+Ether v1.7 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
 =========================================================================================
-Model: qwen2.5:0.5b-instruct-q4_K_M (ultra-lightweight for 4GB RAM systems)
+Model: qwen2.5-coder:3b-instruct-q3_K_S (balanced for 4GB RAM systems)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
@@ -12,17 +12,17 @@ OPTIMIZATIONS IMPLEMENTED:
    Eviction policy: least-recently-accessed entry removed when capacity is full.
 4. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
    using TF-IDF vectorization and chunked document indexing.
-5. ULTRA-LIGHTWEIGHT: Downgraded to qwen2.5:0.5b for 4GB RAM systems
-   - Model size: ~500MB (q4_K_M quantized)
-   - Runs comfortably with 2GB available RAM
-   - Fast inference even on limited hardware
-   - Reduced token limits to prevent OOM errors
+5. BALANCED MODEL: Upgraded to qwen2.5-coder:3b-q3_K_S for better reasoning
+   - Model size: ~2.1GB (q3_K_S quantized)
+   - Fits in 4GB RAM with careful memory management
+   - Much better code analysis than 0.5B models
+   - Aggressive context limiting to prevent OOM
 
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
 - Repeated queries return from cache without calling Ollama.
-- RAG context retrieval dramatically improves analysis quality by loading precise code snippets.
-- Actual RAM/speed gains depend on hardware and project size; no specific numbers claimed.
+- RAG context retrieval limited to 1 file, 300 chars max for speed.
+- Requires closing other apps to free RAM for the 3B model.
 """
 
 import json
@@ -38,7 +38,7 @@ from functools import lru_cache
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:0.5b-instruct-q4_K_M"  # Ultra-lightweight for 4GB RAM systems (~500MB)
+DEFAULT_MODEL = "qwen2.5-coder:3b-instruct-q3_K_S"  # Best balance: smart coding + fits 4GB RAM (~2.1GB)
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
@@ -282,7 +282,7 @@ def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = N
 def _call(messages: List[Dict], max_tokens: int = 200, timeout: int = TIMEOUT_NORMAL) -> str:
     """
     Call Ollama API with configurable token limit and timeout.
-    Optimized for qwen2.5:0.5b model.
+    Optimized for qwen2.5-coder:3b-instruct-q3_K_S model.
     """
     if not messages:
         return "⚠ No input provided."
