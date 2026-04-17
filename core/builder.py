@@ -783,12 +783,9 @@ class EtherBrain:
             context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
-                if complex_intent == 'analyze':
-                    # For analysis, load minimal context (ultra-light for 0.5b model)
-                    context = self.project_loader.build_lightweight_context(query, max_chars=1200)
-                else:
-                    # For other tasks, load very minimal context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=800)
+                # ULTRA-LIGHTWEIGHT: Load minimal context for 0.5b model to prevent timeouts
+                # Only 400 chars from 1 file - this is critical for fast response on low-RAM systems
+                context = self.project_loader.build_lightweight_context(query, max_chars=400)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
