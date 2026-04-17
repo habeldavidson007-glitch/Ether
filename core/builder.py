@@ -1,7 +1,7 @@
 """
 Ether v1.5 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
 =========================================================================================
-Model: qwen2.5-coder:1.5b-instruct-q4_K_M (fits 2GB RAM, optimized for 4GB systems)
+Model: qwen2.5:0.5b-instruct-q4_K_M (ultra-lightweight for 4GB RAM systems)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
@@ -12,10 +12,11 @@ OPTIMIZATIONS IMPLEMENTED:
    Eviction policy: least-recently-accessed entry removed when capacity is full.
 4. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
    using TF-IDF vectorization and chunked document indexing.
-5. LOW-RAM OPTIMIZED: Upgraded to qwen2.5-coder:1.5b for 4GB RAM systems
-   - Model size: ~1.1GB (q4_K_M quantized)
+5. ULTRA-LIGHTWEIGHT: Downgraded to qwen2.5:0.5b for 4GB RAM systems
+   - Model size: ~500MB (q4_K_M quantized)
    - Runs comfortably with 2GB available RAM
-   - Better code reasoning than 0.5b, fits where 3b/7b cannot
+   - Fast inference even on limited hardware
+   - Reduced token limits to prevent OOM errors
 
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
@@ -37,18 +38,18 @@ from functools import lru_cache
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5-coder:1.5b-instruct-q4_K_M"  # Optimized for 4GB RAM systems (~1.1GB)
+DEFAULT_MODEL = "qwen2.5:0.5b-instruct-q4_K_M"  # Ultra-lightweight for 4GB RAM systems (~500MB)
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
-TIMEOUT_NORMAL = 30  # For analysis
+TIMEOUT_NORMAL = 45  # For analysis (increased for slower systems)
 TIMEOUT_SLOW = 90    # For code generation, debugging
 
 # Token limits based on intent
 MAX_TOKENS_FAST = 64     # Greetings, simple responses
 MAX_TOKENS_CHAT = 192    # General conversation
-MAX_TOKENS_ANALYZE = 384 # Analysis tasks
-MAX_TOKENS_BUILD = 1024  # Code generation
+MAX_TOKENS_ANALYZE = 256 # Analysis tasks (reduced for small model)
+MAX_TOKENS_BUILD = 512   # Code generation (reduced for small model)
 
 # Cache settings
 CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
@@ -783,11 +784,11 @@ class EtherBrain:
             if self.project_loader:
                 step("📂 Loading relevant files...")
                 if complex_intent == 'analyze':
-                    # For analysis, load moderate context (reduced for small model)
-                    context = self.project_loader.build_lightweight_context(query, max_chars=2000)
+                    # For analysis, load minimal context (ultra-light for 0.5b model)
+                    context = self.project_loader.build_lightweight_context(query, max_chars=1200)
                 else:
-                    # For other tasks, load minimal context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=1500)
+                    # For other tasks, load very minimal context
+                    context = self.project_loader.build_lightweight_context(query, max_chars=800)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
