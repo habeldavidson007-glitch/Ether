@@ -1,5 +1,5 @@
 """
-Ether v1.3 — Godot AI Development Assistant
+Ether v1.5 — Godot AI Development Assistant
 ============================================
 Local mode: Ollama backend. No API key. No internet.
 
@@ -7,13 +7,15 @@ OPTIMIZATIONS:
 1. Intent-Aware Routing: Greetings respond in <2 seconds via fast path
 2. Lazy Loading: Project files loaded on-demand, not all at once
 3. Cached Intelligence: Repeated queries return instantly from cache
+4. RAG-Enhanced Context: Semantic search retrieves most relevant code snippets
+5. Low-RAM Optimized: qwen2.5-coder:1.5b fits 4GB RAM systems (~1.1GB model)
 
 Run: streamlit run app.py
-Requires: ollama serve && ollama pull qwen2.5:3b-instruct-q4_K_M
+Requires: ollama serve && ollama pull qwen2.5-coder:1.5b-instruct-q4_K_M
 """
 
 import streamlit as st
-import streamlit.components.v1 as components
+from streamlit import iframe
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -23,7 +25,7 @@ from core.builder import EtherBrain
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Ether v1.3",
+    page_title="Ether v1.5",
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -443,9 +445,9 @@ def _tab_chat():
 
     all_msgs = "\n".join(chat_html_parts)
     
-    # Scrollable chat container using components.html
+    # Scrollable chat container using st.iframe (replaces deprecated components.html)
     scroll_id = "chat_scroll_bottom"
-    components.html(f"""
+    iframe_html = f"""
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Space+Mono&display=swap" rel="stylesheet">
     <style>
@@ -489,7 +491,8 @@ def _tab_chat():
     const el = document.getElementById('{scroll_id}');
     if(el) el.scrollIntoView({{behavior:'smooth'}});
     </script>
-    """, height=max(300, min(600, 200 + len(brain.history) * 60)), scrolling=False)
+    """
+    st.iframe(iframe_html, height=max(300, min(600, 200 + len(brain.history) * 60)))
 
     # Pending changes inline
     _render_pending_changes(brain)
@@ -784,9 +787,9 @@ def _tab_settings():
 def main():
     st.markdown(
         '<h2 style="font-family:\'DM Mono\',monospace;font-weight:300;'
-        'letter-spacing:0.12em;color:#6e6af0;margin-bottom:0;">◈ ETHER v1.3</h2>'
+        'letter-spacing:0.12em;color:#6e6af0;margin-bottom:0;">◈ ETHER v1.5</h2>'
         '<p style="color:#54546a;font-family:\'DM Mono\',monospace;font-size:0.72rem;'
-        'letter-spacing:0.15em;margin-top:2px;">OPTIMIZED FOR LOW-RAM LOCAL ENVIRONMENTS</p>',
+        'letter-spacing:0.15em;margin-top:2px;">LOW-RAM OPTIMIZED • RAG-ENHANCED CONTEXT</p>',
         unsafe_allow_html=True
     )
     st.markdown("")

@@ -359,40 +359,27 @@ class LazyProjectLoader:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in scored[:max_files]]
     
-    def build_lightweight_context(self, query: str, max_chars: int = 4000) -> str:
+    def build_lightweight_context(self, query: str, max_chars: int = 400) -> str:
         """
-        Build context string for AI by loading only relevant files.
-        This is the key optimization: don't load everything, just what's needed.
+        ULTRA-LIGHTWEIGHT context builder for 4GB RAM systems.
+        Loads ONLY the single most relevant file snippet (max 400 chars).
+        This prevents timeouts on small models like 0.5B.
         """
-        relevant_paths = self.find_relevant_files(query)
+        # Find most relevant file using keyword matching (fastest method)
+        relevant_paths = self.find_relevant_files(query, max_files=1)
         
-        parts = []
-        used = 0
+        if not relevant_paths:
+            return ""
         
-        for path in relevant_paths:
-            content = self.get_content(path)
-            if not content:
-                continue
-            
-            chunk = content
-            if used + len(chunk) > max_chars:
-                if not parts:
-                    remaining = max_chars - used
-                    chunk = content[:remaining] + "\n# [TRUNCATED]"
-                    parts.append(f"### {path}\n```gdscript\n{chunk}\n```")
-                break
-            
-            parts.append(f"### {path}\n```gdscript\n{content}\n```")
-            used += len(chunk)
+        path = relevant_paths[0]
+        content = self.get_content(path)
         
-        # If no relevant files found, include a few random ones as fallback
-        if not parts and self.file_index:
-            for path in list(self.file_index.keys())[:3]:
-                content = self.get_content(path)
-                if content:
-                    parts.append(f"### {path}\n```gdscript\n{content[:1000]}\n```")
+        if not content:
+            return ""
         
-        return "\n\n".join(parts)
+        # Return only first 400 chars with clear labeling
+        snippet = content[:max_chars]
+        return f"### Relevant code from {path}:\n{snippet}..."
     
     def unload_all(self) -> None:
         """Clear all loaded content to free memory."""
