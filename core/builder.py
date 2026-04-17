@@ -158,8 +158,9 @@ _GREETING_PATTERNS = [
 ]
 
 _STATUS_PATTERNS = [
-    r'\b(status|stats|how\s+(many|much)|count)\b',
-    r'\bwhat\s+(do|i have|files|scripts)|list\s+(files|scripts|scenes)\b',
+    r'^\s*(status|stats)\b',
+    r'\bhow\s+(many|much)\s+(scripts|scenes|files)\b',
+    r'\bcount\s+(scripts|scenes|files)\b',
 ]
 
 _QUICK_HELP_PATTERNS = [
@@ -168,10 +169,17 @@ _QUICK_HELP_PATTERNS = [
     r'^(bye|goodbye|see\s+you|later)\b',
 ]
 
+# Simple definition/explanation requests - respond with fast path
+_EXPLAIN_PATTERNS = [
+    r'^(what\s+is|define|explain)\s+',
+    r'\s+mean(ing)?\s*[?]?\s*$',
+]
+
 # Pre-compiled regexes for speed
 _GREETING_RE = [re.compile(p, re.IGNORECASE) for p in _GREETING_PATTERNS]
 _STATUS_RE = [re.compile(p, re.IGNORECASE) for p in _STATUS_PATTERNS]
 _QUICK_HELP_RE = [re.compile(p, re.IGNORECASE) for p in _QUICK_HELP_PATTERNS]
+_EXPLAIN_RE = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
 
 
 def detect_intent_fast(query: str) -> str:
@@ -179,7 +187,7 @@ def detect_intent_fast(query: str) -> str:
     OPTIMIZATION #1: Intent-Aware Routing (Fast Detection)
     
     Detect simple intents using regex patterns WITHOUT calling LLM.
-    Returns: 'greeting', 'status', 'quick_help', or 'complex'
+    Returns: 'greeting', 'status', 'quick_help', 'explain', or 'complex'
     """
     query_stripped = query.strip()
     
@@ -197,6 +205,13 @@ def detect_intent_fast(query: str) -> str:
     for pattern in _QUICK_HELP_RE:
         if pattern.match(query_stripped) or pattern.search(query_stripped):
             return 'quick_help'
+    
+    # Check simple explanation/definition requests (fast path for short answers)
+    for pattern in _EXPLAIN_RE:
+        if pattern.search(query_stripped):
+            # Only fast path if it's a short, simple question
+            if len(query_stripped) < 60:
+                return 'explain'
     
     return 'complex'
 
@@ -225,6 +240,31 @@ def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = N
                 "• 🔍 Analyzing your project\n"
                 "• 💡 Game design advice\n\n"
                 "Just ask me anything about your Godot project!")
+    
+    elif intent == 'explain':
+        # Fast path for simple definition/explanation questions
+        # Provide brief, direct answers without LLM
+        query_lower = query.lower().strip()
+        
+        # Common Godot/game dev terms
+        explanations = {
+            "repercussion": "Repercussion means a consequence or effect of an action or event. In game development, it often refers to the downstream impacts of a design decision (e.g., 'The repercussion of using global state is harder testing').",
+            "signal": "In Godot, signals are a way for nodes to emit events that other nodes can connect to. They enable loose coupling between objects (e.g., a button emitting 'pressed' signal).",
+            "node": "A Node is the basic building block in Godot. Everything in Godot is a Node - scenes, characters, UI elements, etc. Nodes are organized in a tree structure.",
+            "scene": "A Scene is a collection of nodes saved as a file. You can instance (reuse) scenes multiple times in your project. Think of it like a prefab in Unity.",
+            "export": "@export is a decorator in GDScript that exposes a variable to the Godot editor's Inspector panel, allowing designers to tweak values without code changes.",
+            "gdscript": "GDScript is Godot's built-in scripting language. It's Python-like, designed specifically for Godot's API and game development workflows.",
+            "characterbody2d": "CharacterBody2D is a node type for 2D character movement with built-in collision detection and movement methods like move_and_slide().",
+            "area2d": "Area2D is a 2D node for detecting overlaps, collisions, and monitoring other objects entering/exiting its hitbox.",
+        }
+        
+        # Check if query matches known terms
+        for term, definition in explanations.items():
+            if term in query_lower:
+                return f"**{term.title()}**: {definition}"
+        
+        # Generic fallback for unknown terms
+        return "I don't have a quick definition for that term. Try asking about specific Godot concepts like 'signal', 'node', 'scene', 'export', or 'CharacterBody2D'."
     
     return ""
 
@@ -718,6 +758,12 @@ class EtherBrain:
         elif fast_intent == 'quick_help':
             # FAST PATH: Pre-defined help response
             step("⚡ Fast path (help)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'explain':
+            # FAST PATH: Quick definition/explanation without LLM
+            step("⚡ Fast path (explain)")
             response = get_fast_response(fast_intent, query, self.project_stats)
             return {"type": "chat", "text": response, "fast_path": True}, log
         
