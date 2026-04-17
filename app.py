@@ -773,9 +773,9 @@ def _tab_settings():
     st.divider()
     st.markdown("### 🤖 Model Configuration")
     st.markdown("""
-    - **Model:** qwen2.5:3b-instruct-q4_K_M (Ollama)
-    - **Context Window:** Optimized for better reasoning
-    - **Timeout:** 15s (fast) / 60s (normal) / 120s (slow)
+    - **Model:** qwen2.5:0.5b (Ollama)
+    - **Context Window:** Optimized for 4GB RAM
+    - **Timeout:** 10s (fast) / 30s (normal) / 90s (slow)
     """)
 
 
