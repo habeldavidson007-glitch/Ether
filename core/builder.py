@@ -45,8 +45,8 @@ DEFAULT_MODEL = "qwen2.5-coder:3b-instruct-q3_K_S"  # Best balance: smart coding
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
-TIMEOUT_NORMAL = 20  # For analysis (reduced for v1.8 with static analysis)
-TIMEOUT_SLOW = 45    # For code generation, debugging (reduced for v1.8)
+TIMEOUT_NORMAL = 30  # For analysis (increased for v1.8 - model needs time to summarize findings)
+TIMEOUT_SLOW = 60    # For code generation, debugging (increased for v1.8)
 
 # Token limits based on intent
 MAX_TOKENS_FAST = 64     # Greetings, simple responses
@@ -577,7 +577,7 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
+    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_SLOW)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
