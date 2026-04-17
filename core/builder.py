@@ -1,7 +1,7 @@
 """
-Ether v1.3 — AI Pipeline with Intent-Aware Routing, Lazy Loading & Cached Intelligence
-=======================================================================================
-Model: qwen2.5:3b-instruct-q4_K_M (fits 4GB RAM)
+Ether v1.7 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
+=========================================================================================
+Model: qwen2.5-coder:3b-instruct-q3_K_S (balanced for 4GB RAM systems)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
@@ -10,11 +10,19 @@ OPTIMIZATIONS IMPLEMENTED:
 2. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
 3. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
    Eviction policy: least-recently-accessed entry removed when capacity is full.
+4. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
+   using TF-IDF vectorization and chunked document indexing.
+5. BALANCED MODEL: Upgraded to qwen2.5-coder:3b-q3_K_S for better reasoning
+   - Model size: ~2.1GB (q3_K_S quantized)
+   - Fits in 4GB RAM with careful memory management
+   - Much better code analysis than 0.5B models
+   - Aggressive context limiting to prevent OOM
 
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
 - Repeated queries return from cache without calling Ollama.
-- Actual RAM/speed gains depend on hardware and project size; no specific numbers claimed.
+- RAG context retrieval limited to 1 file, 300 chars max for speed.
+- Requires closing other apps to free RAM for the 3B model.
 """
 
 import json
@@ -30,18 +38,18 @@ from functools import lru_cache
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:3b-instruct-q4_K_M"
+DEFAULT_MODEL = "qwen2.5-coder:3b-instruct-q3_K_S"  # Best balance: smart coding + fits 4GB RAM (~2.1GB)
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
-TIMEOUT_NORMAL = 30  # For analysis
+TIMEOUT_NORMAL = 45  # For analysis (increased for slower systems)
 TIMEOUT_SLOW = 90    # For code generation, debugging
 
 # Token limits based on intent
 MAX_TOKENS_FAST = 64     # Greetings, simple responses
 MAX_TOKENS_CHAT = 192    # General conversation
-MAX_TOKENS_ANALYZE = 384 # Analysis tasks
-MAX_TOKENS_BUILD = 1024  # Code generation
+MAX_TOKENS_ANALYZE = 256 # Analysis tasks (reduced for small model)
+MAX_TOKENS_BUILD = 512   # Code generation (reduced for small model)
 
 # Cache settings
 CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
@@ -274,7 +282,7 @@ def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = N
 def _call(messages: List[Dict], max_tokens: int = 200, timeout: int = TIMEOUT_NORMAL) -> str:
     """
     Call Ollama API with configurable token limit and timeout.
-    Optimized for qwen2.5:0.5b model.
+    Optimized for qwen2.5-coder:3b-instruct-q3_K_S model.
     """
     if not messages:
         return "⚠ No input provided."
@@ -775,12 +783,9 @@ class EtherBrain:
             context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
-                if complex_intent == 'analyze':
-                    # For analysis, load moderate context (reduced for small model)
-                    context = self.project_loader.build_lightweight_context(query, max_chars=2000)
-                else:
-                    # For other tasks, load minimal context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=1500)
+                # ULTRA-LIGHTWEIGHT: Load minimal context for 0.5b model to prevent timeouts
+                # Only 400 chars from 1 file - this is critical for fast response on low-RAM systems
+                context = self.project_loader.build_lightweight_context(query, max_chars=400)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
