@@ -1,12 +1,12 @@
 """
 Ether v1.3 — AI Pipeline with Intent-Aware Routing, Lazy Loading & Cached Intelligence
 =======================================================================================
-Model: qwen2.5:3b-instruct-q4_K_M (recommended for better reasoning)
+Model: qwen2.5:3b-instruct-q4_K_M (fits 4GB RAM)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
 1. INTENT-AWARE ROUTING: Detect simple intents (greetings, status) via regex and route
-   to fast path with appropriate token limits and timeouts.
+   to fast path with low token limits (64-192 tokens) and short timeouts (10s).
 2. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
 3. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
    Eviction policy: least-recently-accessed entry removed when capacity is full.
@@ -33,15 +33,15 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen2.5:3b-instruct-q4_K_M"
 
 # Timeout settings based on intent
-TIMEOUT_FAST = 15    # For greetings, simple chat
-TIMEOUT_NORMAL = 60  # For analysis
-TIMEOUT_SLOW = 120   # For code generation, debugging
+TIMEOUT_FAST = 10    # For greetings, simple chat
+TIMEOUT_NORMAL = 30  # For analysis
+TIMEOUT_SLOW = 90    # For code generation, debugging
 
 # Token limits based on intent
-MAX_TOKENS_FAST = 128    # Greetings, simple responses
-MAX_TOKENS_CHAT = 512    # General conversation
-MAX_TOKENS_ANALYZE = 768 # Analysis tasks
-MAX_TOKENS_BUILD = 1536  # Code generation
+MAX_TOKENS_FAST = 64     # Greetings, simple responses
+MAX_TOKENS_CHAT = 192    # General conversation
+MAX_TOKENS_ANALYZE = 384 # Analysis tasks
+MAX_TOKENS_BUILD = 1024  # Code generation
 
 # Cache settings
 CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
@@ -158,8 +158,9 @@ _GREETING_PATTERNS = [
 ]
 
 _STATUS_PATTERNS = [
-    r'\b(status|stats|how\s+(many|much)|count)\b',
-    r'\bwhat\s+(do|i have|files|scripts)|list\s+(files|scripts|scenes)\b',
+    r'^\s*(status|stats)\b',
+    r'\bhow\s+(many|much)\s+(scripts|scenes|files)\b',
+    r'\bcount\s+(scripts|scenes|files)\b',
 ]
 
 _QUICK_HELP_PATTERNS = [
@@ -168,10 +169,17 @@ _QUICK_HELP_PATTERNS = [
     r'^(bye|goodbye|see\s+you|later)\b',
 ]
 
+# Simple definition/explanation requests - respond with fast path
+_EXPLAIN_PATTERNS = [
+    r'^(what\s+is|define|explain)\s+',
+    r'\s+mean(ing)?\s*[?]?\s*$',
+]
+
 # Pre-compiled regexes for speed
 _GREETING_RE = [re.compile(p, re.IGNORECASE) for p in _GREETING_PATTERNS]
 _STATUS_RE = [re.compile(p, re.IGNORECASE) for p in _STATUS_PATTERNS]
 _QUICK_HELP_RE = [re.compile(p, re.IGNORECASE) for p in _QUICK_HELP_PATTERNS]
+_EXPLAIN_RE = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
 
 
 def detect_intent_fast(query: str) -> str:
@@ -179,7 +187,7 @@ def detect_intent_fast(query: str) -> str:
     OPTIMIZATION #1: Intent-Aware Routing (Fast Detection)
     
     Detect simple intents using regex patterns WITHOUT calling LLM.
-    Returns: 'greeting', 'status', 'quick_help', or 'complex'
+    Returns: 'greeting', 'status', 'quick_help', 'explain', or 'complex'
     """
     query_stripped = query.strip()
     
@@ -197,6 +205,13 @@ def detect_intent_fast(query: str) -> str:
     for pattern in _QUICK_HELP_RE:
         if pattern.match(query_stripped) or pattern.search(query_stripped):
             return 'quick_help'
+    
+    # Check simple explanation/definition requests (fast path for short answers)
+    for pattern in _EXPLAIN_RE:
+        if pattern.search(query_stripped):
+            # Only fast path if it's a short, simple question
+            if len(query_stripped) < 60:
+                return 'explain'
     
     return 'complex'
 
@@ -226,6 +241,31 @@ def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = N
                 "• 💡 Game design advice\n\n"
                 "Just ask me anything about your Godot project!")
     
+    elif intent == 'explain':
+        # Fast path for simple definition/explanation questions
+        # Provide brief, direct answers without LLM
+        query_lower = query.lower().strip()
+        
+        # Common Godot/game dev terms
+        explanations = {
+            "repercussion": "Repercussion means a consequence or effect of an action or event. In game development, it often refers to the downstream impacts of a design decision (e.g., 'The repercussion of using global state is harder testing').",
+            "signal": "In Godot, signals are a way for nodes to emit events that other nodes can connect to. They enable loose coupling between objects (e.g., a button emitting 'pressed' signal).",
+            "node": "A Node is the basic building block in Godot. Everything in Godot is a Node - scenes, characters, UI elements, etc. Nodes are organized in a tree structure.",
+            "scene": "A Scene is a collection of nodes saved as a file. You can instance (reuse) scenes multiple times in your project. Think of it like a prefab in Unity.",
+            "export": "@export is a decorator in GDScript that exposes a variable to the Godot editor's Inspector panel, allowing designers to tweak values without code changes.",
+            "gdscript": "GDScript is Godot's built-in scripting language. It's Python-like, designed specifically for Godot's API and game development workflows.",
+            "characterbody2d": "CharacterBody2D is a node type for 2D character movement with built-in collision detection and movement methods like move_and_slide().",
+            "area2d": "Area2D is a 2D node for detecting overlaps, collisions, and monitoring other objects entering/exiting its hitbox.",
+        }
+        
+        # Check if query matches known terms
+        for term, definition in explanations.items():
+            if term in query_lower:
+                return f"**{term.title()}**: {definition}"
+        
+        # Generic fallback for unknown terms
+        return "I don't have a quick definition for that term. Try asking about specific Godot concepts like 'signal', 'node', 'scene', 'export', or 'CharacterBody2D'."
+    
     return ""
 
 
@@ -234,7 +274,7 @@ def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = N
 def _call(messages: List[Dict], max_tokens: int = 200, timeout: int = TIMEOUT_NORMAL) -> str:
     """
     Call Ollama API with configurable token limit and timeout.
-    Optimized for qwen2.5:3b-instruct-q4_K_M model.
+    Optimized for qwen2.5:0.5b model.
     """
     if not messages:
         return "⚠ No input provided."
@@ -437,13 +477,13 @@ No JSON output — just clear, useful text."""
 
 def think(task: str, context: str) -> Dict:
     # Truncate context for thinking step
-    context_truncated = context[:1000] if len(context) > 1000 else context
+    context_truncated = context[:600] if len(context) > 600 else context
     
     messages = [
         {"role": "system", "content": _THINK_SYSTEM},
         {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context_truncated}"}
     ]
-    raw = _call(messages, max_tokens=400)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_FAST)
     result = _safe_json(raw)
     if not result:
         result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
@@ -452,8 +492,8 @@ def think(task: str, context: str) -> Dict:
 
 def plan(task: str, thought: Dict, context: str) -> Dict:
     # Truncate inputs for planning
-    context_truncated = context[:1000] if len(context) > 1000 else context
-    thought_str = json.dumps(thought, indent=2)[:400]
+    context_truncated = context[:600] if len(context) > 600 else context
+    thought_str = json.dumps(thought, indent=2)[:300]
     
     messages = [
         {"role": "system", "content": _PLAN_SYSTEM},
@@ -463,7 +503,7 @@ def plan(task: str, thought: Dict, context: str) -> Dict:
             f"Project context:\n{context_truncated}"
         )}
     ]
-    raw = _call(messages, max_tokens=600)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
     result = _safe_json(raw)
     if not result:
         result = {"files": [], "connections": [], "notes": raw[:200]}
@@ -472,18 +512,18 @@ def plan(task: str, thought: Dict, context: str) -> Dict:
 
 def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
     # Truncate context heavily for build step
-    context_truncated = context[:1500] if len(context) > 1500 else context
+    context_truncated = context[:1000] if len(context) > 1000 else context
     
     messages = [
         {"role": "system", "content": _BUILD_SYSTEM},
         {"role": "user", "content": (
             f"Task: {task}\n\n"
-            f"Analysis: {json.dumps(thought, indent=2)[:500]}\n\n"  # Truncate thought
-            f"Plan: {json.dumps(blueprint, indent=2)[:500]}\n\n"   # Truncate plan
+            f"Analysis: {json.dumps(thought, indent=2)[:400]}\n\n"  # Truncate thought
+            f"Plan: {json.dumps(blueprint, indent=2)[:400]}\n\n"   # Truncate plan
             f"Existing code:\n{context_truncated}"
         )}
     ]
-    raw = _call(messages, max_tokens=1024)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -496,9 +536,9 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
 def debug(error_log: str, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _DEBUG_SYSTEM},
-        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1500]}"}  # Truncate context
+        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1000]}"}  # Truncate context
     ]
-    raw = _call(messages, max_tokens=1024)  # Reduced for speed
+    raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -519,32 +559,31 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     # Add user message with context (if available)
     if context and len(context) > 0:
         # Truncate context aggressively for small model
-        max_context_len = 1200
+        max_context_len = 800
         if len(context) > max_context_len:
             context = context[:max_context_len] + "\n...(truncated)"
         messages.append({"role": "user", "content": f"Task: {task}\n\nPROJECT CODE:\n{context}"})
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call(messages, max_tokens=384)
+    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
-    # Expert persona system prompt - optimized for qwen2.5:3b-instruct-q4_K_M
+    # Expert persona system prompt - LIGHTWEIGHT version for 0.5b
     persona = _EXPERT_PERSONAS.get(chat_mode, _EXPERT_PERSONAS["mixed"])
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
 
-    # System prompt with conversational instructions
+    # Simplified system prompt for faster response
     system = _GODOT_SYSTEM + persona + mode_suffix + """
 
-You are helpful and conversational. Respond naturally to greetings like "hi", "hello", "whatsup".
-Be friendly but concise. Keep answers under 3 sentences for casual chat."""
+You are helpful and conversational. Be friendly but concise."""
 
-    # Build messages with ONLY current message (no history to save tokens & speed)
+    # Build messages with ONLY current message (no context to save tokens & speed)
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": message})
 
-    return _call(messages, max_tokens=256)
+    return _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_NORMAL)
 
 def run_pipeline(task: str, intent: str, context: str,
                  history: List[Dict],
@@ -721,6 +760,12 @@ class EtherBrain:
             response = get_fast_response(fast_intent, query, self.project_stats)
             return {"type": "chat", "text": response, "fast_path": True}, log
         
+        elif fast_intent == 'explain':
+            # FAST PATH: Quick definition/explanation without LLM
+            step("⚡ Fast path (explain)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
         else:
             # SLOW PATH: Complex intent requires LLM
             # Determine complex intent type (analyze, debug, build, chat)
@@ -731,11 +776,11 @@ class EtherBrain:
             if self.project_loader:
                 step("📂 Loading relevant files...")
                 if complex_intent == 'analyze':
-                    # For analysis, load more context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=4000)
+                    # For analysis, load moderate context (reduced for small model)
+                    context = self.project_loader.build_lightweight_context(query, max_chars=2000)
                 else:
                     # For other tasks, load minimal context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=2000)
+                    context = self.project_loader.build_lightweight_context(query, max_chars=1500)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
@@ -778,11 +823,11 @@ class EtherBrain:
                     return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
             
             else:
-                # Default to chat
+                # Default to chat - don't pass heavy context for casual chat
                 step("💬 Chatting...")
                 try:
                     text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
-                               context, chat_mode=self.chat_mode)
+                               "", chat_mode=self.chat_mode)
                     # Cache chat responses too
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log
@@ -804,13 +849,13 @@ class EtherBrain:
         if any(k in query_lower for k in ["create", "make", "implement", "generate", "write", "add", "build", "new"]):
             return "build"
         
-        # Analyze keywords - expanded to catch more analytical queries
-        if any(k in query_lower for k in ["analyze", "explain", "list", "find", "show", "what", "how", 
-                                           "why", "review", "check", "issues", "problems", "describe",
-                                           "think of", "opinion", "feedback", "evaluate", "assess"]):
+        # Analyze keywords - be more specific to avoid catching casual questions
+        if any(k in query_lower for k in ["analyze", "list", "find", "show", "review", "check", 
+                                           "issues", "problems", "describe", "what do you think", 
+                                           "how is my", "rate my", "feedback on"]):
             return "analyze"
         
-        # Default to chat
+        # Default to chat for general questions
         return "chat"
     
     def _get_memory_context(self, query: str) -> str:
