@@ -1,5 +1,5 @@
 """
-Ether v1.4 — Godot AI Development Assistant
+Ether v1.5 — Godot AI Development Assistant
 ============================================
 Local mode: Ollama backend. No API key. No internet.
 
@@ -7,9 +7,11 @@ OPTIMIZATIONS:
 1. Intent-Aware Routing: Greetings respond in <2 seconds via fast path
 2. Lazy Loading: Project files loaded on-demand, not all at once
 3. Cached Intelligence: Repeated queries return instantly from cache
+4. RAG-Enhanced Context: Semantic search retrieves most relevant code snippets
+5. Low-RAM Optimized: qwen2.5-coder:1.5b fits 4GB RAM systems (~1.1GB model)
 
 Run: streamlit run app.py
-Requires: ollama serve && ollama pull qwen2.5-coder:7b-instruct-q4_K_M
+Requires: ollama serve && ollama pull qwen2.5-coder:1.5b-instruct-q4_K_M
 """
 
 import streamlit as st
@@ -23,7 +25,7 @@ from core.builder import EtherBrain
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Ether v1.4",
+    page_title="Ether v1.5",
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -785,9 +787,9 @@ def _tab_settings():
 def main():
     st.markdown(
         '<h2 style="font-family:\'DM Mono\',monospace;font-weight:300;'
-        'letter-spacing:0.12em;color:#6e6af0;margin-bottom:0;">◈ ETHER v1.4</h2>'
+        'letter-spacing:0.12em;color:#6e6af0;margin-bottom:0;">◈ ETHER v1.5</h2>'
         '<p style="color:#54546a;font-family:\'DM Mono\',monospace;font-size:0.72rem;'
-        'letter-spacing:0.15em;margin-top:2px;">RAG-ENHANCED CONTEXT & SEMANTIC SEARCH</p>',
+        'letter-spacing:0.15em;margin-top:2px;">LOW-RAM OPTIMIZED • RAG-ENHANCED CONTEXT</p>',
         unsafe_allow_html=True
     )
     st.markdown("")

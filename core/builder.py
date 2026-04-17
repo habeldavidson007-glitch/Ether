@@ -1,7 +1,7 @@
 """
-Ether v1.4 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
+Ether v1.5 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
 =========================================================================================
-Model: qwen2.5:3b-instruct-q4_K_M (fits 4GB RAM)
+Model: qwen2.5-coder:1.5b-instruct-q4_K_M (fits 2GB RAM, optimized for 4GB systems)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
@@ -12,6 +12,10 @@ OPTIMIZATIONS IMPLEMENTED:
    Eviction policy: least-recently-accessed entry removed when capacity is full.
 4. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
    using TF-IDF vectorization and chunked document indexing.
+5. LOW-RAM OPTIMIZED: Upgraded to qwen2.5-coder:1.5b for 4GB RAM systems
+   - Model size: ~1.1GB (q4_K_M quantized)
+   - Runs comfortably with 2GB available RAM
+   - Better code reasoning than 0.5b, fits where 3b/7b cannot
 
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
@@ -33,7 +37,7 @@ from functools import lru_cache
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"  # Upgraded for better code analysis
+DEFAULT_MODEL = "qwen2.5-coder:1.5b-instruct-q4_K_M"  # Optimized for 4GB RAM systems (~1.1GB)
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
