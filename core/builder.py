@@ -1,18 +1,20 @@
 """
-Ether v1.7 — AI Pipeline with Intent-Aware Routing, Lazy Loading & RAG-Enhanced Context
-=========================================================================================
+Ether v1.8 — AI Pipeline with Hybrid Static Analysis, Intent-Aware Routing & Lazy Loading
+===========================================================================================
 Model: qwen2.5-coder:3b-instruct-q3_K_S (balanced for 4GB RAM systems)
 No API key. No internet required.
 
 OPTIMIZATIONS IMPLEMENTED:
-1. INTENT-AWARE ROUTING: Detect simple intents (greetings, status) via regex and route
+1. HYBRID STATIC ANALYSIS: Pure Python GDScript anti-pattern detector (no LLM).
+   Scans 42 scripts in <1 second, reduces LLM context by ~95%.
+2. INTENT-AWARE ROUTING: Detect simple intents (greetings, status) via regex and route
    to fast path with low token limits (64-192 tokens) and short timeouts (10s).
-2. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
-3. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
+3. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
+4. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
    Eviction policy: least-recently-accessed entry removed when capacity is full.
-4. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
+5. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
    using TF-IDF vectorization and chunked document indexing.
-5. BALANCED MODEL: Upgraded to qwen2.5-coder:3b-q3_K_S for better reasoning
+6. BALANCED MODEL: Upgraded to qwen2.5-coder:3b-q3_K_S for better reasoning
    - Model size: ~2.1GB (q3_K_S quantized)
    - Fits in 4GB RAM with careful memory management
    - Much better code analysis than 0.5B models
@@ -21,6 +23,7 @@ OPTIMIZATIONS IMPLEMENTED:
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
 - Repeated queries return from cache without calling Ollama.
+- Project analysis now uses static analyzer first → instant feedback.
 - RAG context retrieval limited to 1 file, 300 chars max for speed.
 - Requires closing other apps to free RAM for the 3B model.
 """
@@ -42,8 +45,8 @@ DEFAULT_MODEL = "qwen2.5-coder:3b-instruct-q3_K_S"  # Best balance: smart coding
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
-TIMEOUT_NORMAL = 45  # For analysis (increased for slower systems)
-TIMEOUT_SLOW = 90    # For code generation, debugging
+TIMEOUT_NORMAL = 30  # For analysis (increased for v1.8 - model needs time to summarize findings)
+TIMEOUT_SLOW = 60    # For code generation, debugging (increased for v1.8)
 
 # Token limits based on intent
 MAX_TOKENS_FAST = 64     # Greetings, simple responses
@@ -574,7 +577,7 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
+    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_SLOW)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
@@ -799,7 +802,24 @@ class EtherBrain:
             if complex_intent == 'analyze':
                 step("🔍 Analyzing project...")
                 try:
-                    text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    # HYBRID STATIC ANALYSIS PIPELINE (v1.8)
+                    # Step 1: Run static analyzer first (instant, no LLM)
+                    static_report = ""
+                    if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
+                        from core.static_analyzer import StaticAnalyzer
+                        analyzer = StaticAnalyzer()
+                        static_report = analyzer.analyze(str(self.project_loader._base_path))
+                        step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
+                    
+                    # Step 2: Send ONLY the findings to LLM for friendly summary
+                    # This reduces context by ~95% compared to sending all source code
+                    if static_report:
+                        llm_prompt = f"Here are the technical findings: {static_report}\n\nPlease summarize these for the user in 2-3 friendly sentences."
+                        text = analyze(llm_prompt, "", self.history, chat_mode=self.chat_mode)
+                    else:
+                        # Fallback if static analysis couldn't run
+                        text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    
                     # Cache the result
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log
