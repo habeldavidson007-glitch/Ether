@@ -1,5 +1,5 @@
 """
-Ether v1.8 — AI Pipeline with Hybrid Static Analysis, Intent-Aware Routing & Lazy Loading
+Ether v1.9 — AI Pipeline with Hybrid Static Analysis, Intent-Aware Routing & Lazy Loading
 ===========================================================================================
 Model: qwen2.5-coder:3b-instruct-q3_K_S (balanced for 4GB RAM systems)
 No API key. No internet required.
@@ -19,6 +19,11 @@ OPTIMIZATIONS IMPLEMENTED:
    - Fits in 4GB RAM with careful memory management
    - Much better code analysis than 0.5B models
    - Aggressive context limiting to prevent OOM
+7. SGMA INTEGRATION: Static Graph Analysis for dependency mapping and coupling detection.
+8. MATH CURVE LOADERS: Smart load curve algorithm by Paidax01 for memory-aware context selection.
+   - Dynamically decides how much context to send based on available RAM
+   - Prevents OOM crashes on 4GB systems
+   - Prioritizes high-impact findings using complexity scoring
 
 Performance Notes:
 - Greetings/status/help bypass the LLM entirely (fast path via regex).
@@ -45,8 +50,8 @@ DEFAULT_MODEL = "qwen2.5-coder:3b-instruct-q3_K_S"  # Best balance: smart coding
 
 # Timeout settings based on intent
 TIMEOUT_FAST = 10    # For greetings, simple chat
-TIMEOUT_NORMAL = 30  # For analysis (increased for v1.8 - model needs time to summarize findings)
-TIMEOUT_SLOW = 60    # For code generation, debugging (increased for v1.8)
+TIMEOUT_NORMAL = 30  # For analysis (increased for v1.9 - model needs time to summarize findings)
+TIMEOUT_SLOW = 60    # For code generation, debugging (increased for v1.9)
 
 # Token limits based on intent
 MAX_TOKENS_FAST = 64     # Greetings, simple responses
@@ -802,19 +807,46 @@ class EtherBrain:
             if complex_intent == 'analyze':
                 step("🔍 Analyzing project...")
                 try:
-                    # HYBRID STATIC ANALYSIS PIPELINE (v1.8)
+                    # HYBRID STATIC ANALYSIS PIPELINE (v1.9)
                     # Step 1: Run static analyzer first (instant, no LLM)
                     static_report = ""
+                    rag_context = ""
+                    
                     if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
                         from core.static_analyzer import StaticAnalyzer
+                        from core.rag_index import RAGIndex
+                        
+                        # Run static analysis
                         analyzer = StaticAnalyzer()
                         static_report = analyzer.analyze(str(self.project_loader._base_path))
                         step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
+                        
+                        # Build RAG index with SGMA integration
+                        gd_files = list(Path(self.project_loader._base_path).rglob("*.gd"))
+                        if gd_files:
+                            rag_index = RAGIndex()
+                            file_paths = [str(f) for f in gd_files]
+                            rag_index.build_index(file_paths, str(self.project_loader._base_path))
+                            
+                            # Enhance with SGMA data
+                            for file_path, signature in rag_index.signatures.items():
+                                if file_path in analyzer.script_graph:
+                                    node = analyzer.script_graph[file_path]
+                                    signature.dependencies = node.depends_on.copy()
+                                    signature.complexity_score = float(node.complexity)
+                            
+                            # Get optimized context using Math Curve Loader
+                            rag_context = rag_index.get_optimized_context(query, budget_chars=2000)
+                            step("📊 RAG index built with Math Curve filtering")
                     
-                    # Step 2: Send ONLY the findings to LLM for friendly summary
+                    # Step 2: Send ONLY the filtered findings to LLM for friendly summary
                     # This reduces context by ~95% compared to sending all source code
                     if static_report:
-                        llm_prompt = f"Here are the technical findings: {static_report}\n\nPlease summarize these for the user in 2-3 friendly sentences."
+                        llm_prompt = f"Here are the technical findings:\n{static_report}"
+                        if rag_context:
+                            llm_prompt += f"\n\n{rag_context}"
+                        llm_prompt += "\n\nPlease summarize these findings for the user in 2-3 friendly sentences. Focus on the most critical issues and provide actionable advice."
+                        
                         text = analyze(llm_prompt, "", self.history, chat_mode=self.chat_mode)
                     else:
                         # Fallback if static analysis couldn't run

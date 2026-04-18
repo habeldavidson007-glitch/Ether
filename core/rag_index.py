@@ -120,18 +120,18 @@ class RAGIndex:
             )
             
             # Extract function names
-            func_pattern = re.compile(r'^\s*func\s+([a-zA-Z_][a-zA-Z0-9_]*)')
+            func_pattern = re.compile(r'^\s*func\s+([a-zA-Z_][a-zA-Z0-9_]*)', re.MULTILINE)
             for match in func_pattern.finditer(content):
                 signature.function_names.add(match.group(1).lower())
             
             # Extract class names
-            class_pattern = re.compile(r'^(?:class|extends)\s+([a-zA-Z_][a-zA-Z0-9_]*)')
-            for match in class_pattern.finditer(content, re.MULTILINE):
+            class_pattern = re.compile(r'^(?:class|extends)\s+([a-zA-Z_][a-zA-Z0-9_]*)', re.MULTILINE)
+            for match in class_pattern.finditer(content):
                 signature.class_names.add(match.group(1).lower())
             
             # Extract signal names
-            signal_pattern = re.compile(r'^\s*signal\s+([a-zA-Z_][a-zA-Z0-9_]*)')
-            for match in signal_pattern.finditer(content, re.MULTILINE):
+            signal_pattern = re.compile(r'^\s*signal\s+([a-zA-Z_][a-zA-Z0-9_]*)', re.MULTILINE)
+            for match in signal_pattern.finditer(content):
                 signature.signal_names.add(match.group(1).lower())
             
             # Extract keywords (Godot-specific)
@@ -326,6 +326,87 @@ class RAGIndex:
         
         if parts:
             return "🔍 RELEVANT FILES:\n" + "\n".join(parts)
+        return ""
+    
+    def get_optimized_context(self, query: str, budget_chars: int = 2000) -> str:
+        """
+        MATH CURVE LOADER: Get optimized context using decay curve formula.
+        
+        This implements the Math Curve Loader algorithm that:
+        1. Scores findings by relevance and complexity
+        2. Applies exponential decay based on position
+        3. Selects top items that fit within memory budget
+        
+        Args:
+            query: Search query or analysis request
+            budget_chars: Maximum character budget (default 2000 for ~1000 tokens)
+            
+        Returns:
+            Filtered and sorted context string within budget
+        """
+        if not self.is_indexed:
+            return ""
+        
+        # Step 1: Search for relevant documents
+        results = self.search(query, top_k=20)  # Get more candidates for filtering
+        
+        if not results:
+            return ""
+        
+        # Step 2: Apply math curve decay scoring
+        # Formula: final_score = base_score * e^(-position/decay_factor)
+        decay_factor = 3.0  # Controls how quickly relevance decays
+        
+        scored_results = []
+        for i, (file_path, base_score) in enumerate(results):
+            signature = self.signatures.get(file_path)
+            if not signature:
+                continue
+            
+            # Apply exponential decay based on position
+            decay_multiplier = math.exp(-i / decay_factor)
+            final_score = base_score * decay_multiplier
+            
+            # Boost by complexity (more complex = more important to review)
+            complexity_boost = 1.0 + (signature.complexity_score / 100.0)
+            final_score *= complexity_boost
+            
+            scored_results.append((file_path, final_score, signature))
+        
+        # Step 3: Sort by final score
+        scored_results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Step 4: Select items that fit within budget
+        parts = []
+        total_chars = 0
+        
+        for file_path, score, signature in scored_results:
+            # Format concise summary
+            header = f"\n📄 {Path(file_path).name}"
+            details = []
+            
+            if signature.function_names:
+                funcs = ", ".join(sorted(signature.function_names)[:5])
+                details.append(f"Functions: {funcs}")
+            
+            if signature.class_names:
+                classes = ", ".join(sorted(signature.class_names)[:3])
+                details.append(f"Classes: {classes}")
+            
+            details.append(f"Lines: {signature.line_count}, Complexity: {signature.complexity_score:.1f}")
+            
+            summary = header + "\n   " + " | ".join(details)
+            estimated_cost = len(summary) + 20  # overhead
+            
+            if total_chars + estimated_cost <= budget_chars:
+                parts.append(summary)
+                total_chars += estimated_cost
+            else:
+                # Budget exhausted
+                break
+        
+        if parts:
+            return "🔍 OPTIMIZED CONTEXT (MathCurve Filtered):\n" + "\n".join(parts)
         return ""
     
     def get_stats(self) -> Dict[str, Any]:
