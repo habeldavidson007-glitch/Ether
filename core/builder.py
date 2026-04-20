@@ -659,26 +659,7 @@ def chat(message: str, history: List[Dict], context: str, role: str = "CHAT") ->
     # Use appropriate token limit
     max_tokens = MAX_TOKENS.get(role.lower(), MAX_TOKENS["chat"])
     
-    return _call(role.lower(), messages)
-
-
-# ── Smart Retry with Fallback Model (optional improvement) ─────────────────────
-
-def _call_with_retry(role: str, messages: List[Dict], fallback_model: str = "gemma:2b") -> str:
-    """
-    Smart retry: switch to smaller model on timeout.
-    """
-    result = _call(role, messages)
-    
-    if "Timeout" in result:
-        # Switch to fallback model
-        global MODELS
-        original_model = MODELS.get(role, MODELS["chat"])
-        MODELS[role] = fallback_model
-        result = _call(role, messages)
-        MODELS[role] = original_model  # Restore
-    
-    return result
+    return _call_with_retry(role.lower(), messages)
 
 
 # ── System Prompts (from v1.8) ──────────────────────────────────────────────────
