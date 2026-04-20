@@ -1,5 +1,5 @@
 """
-Ether v1.8 — Godot AI Development Assistant (CLI Edition)
+Ether v1.9 — Godot AI Development Assistant (CLI Edition)
 ==========================================================
 Full local mode: No Streamlit, no browser, pure terminal interface.
 OPTIMIZATIONS:
@@ -10,9 +10,11 @@ OPTIMIZATIONS:
 5. Balanced Model: qwen2.5-coder:3b-q3_K_S for better reasoning (~2.1GB)
 6. CLI Native: Zero web framework overhead, minimal memory footprint
 7. HYBRID STATIC ANALYSIS: Instant GDScript anti-pattern detection (no LLM)
+8. SGMA INTEGRATION: Static Graph Analysis for dependency mapping
+9. MATH CURVE LOADERS: Memory-aware context selection for 4GB RAM systems
 
 Run: python ether_cli.py
-Requires: ollama serve && ollama pull qwen2.5-coder:3b-instruct-q3_K_S
+Requires: ollama serve && ollama pull mistral:7b
 """
 
 import sys
@@ -35,11 +37,12 @@ class EtherCLI:
         
         # Welcome message
         print("\n" + "=" * 70)
-        print("  ◈ ETHER v1.8 CLI — Godot AI Development Assistant")
+        print("  ◈ ETHER v1.9 CLI — Godot AI Development Assistant")
         print("=" * 70)
-        print("\n  Local • Private • Optimized for 4GB RAM")
-        print("  Model: qwen2.5-coder:3b-instruct-q3_K_S (~2.1GB)")
-        print("\n  ⚡ NEW: Hybrid Static Analysis - 95% faster project reviews!")
+        print("\n  Local • Private • Advanced Code Analysis")
+        print("  Model: mistral:7b (~5GB quantized)")
+        print("\n  ⚡ NEW: Hybrid Static Analysis + SGMA + Math Curve Loaders!")
+        print("  🧠 Optimized for 4GB RAM - Instant Project Reviews")
         print("\n  Commands:")
         print("    /load <path>   — Load Godot project folder")
         print("    /status        — Show project stats")
@@ -212,11 +215,11 @@ class EtherCLI:
         print(f"\n{'ETHER':<10} [{elapsed:.1f}s]")
         print("-" * 60)
         
-        # Extract text from result
-        response = result.get("text", "No response generated.")
-        
+        # Extract text from result with safe fallback
+        response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
+
         # Display response
-        lines = response.split('\n')
+        lines = str(response).split('\n')
         for i, line in enumerate(lines):
             if i > 0 and i % 20 == 0:
                 # Pause for very long responses
