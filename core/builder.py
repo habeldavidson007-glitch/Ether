@@ -24,9 +24,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# V2.1 CONFIG FOR 2GB RAM - STRICT LIMITS
+# V2.2 CONFIG FOR 2GB RAM - ULTRA STRICT LIMITS
 PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
-FALLBACK_MODEL = "gemma:2b"
+FALLBACK_MODEL = "qwen2.5:0.5b"  # Faster fallback for low-end hardware
 
 MODELS = {
     "generate": PRIMARY_MODEL,
@@ -35,19 +35,19 @@ MODELS = {
     "chat":     PRIMARY_MODEL,
 }
 
-# STRICT CONTEXT LIMITS - Structured summaries only
-MAX_CONTEXT_CHARS = 200
-MAX_CONTEXT_ANALYZE = 400  # Analysis benefits from more context
-MAX_CONTEXT_BUILD = 300    # Build needs focused context
-TIMEOUT_PRIMARY = 45
-TIMEOUT_FALLBACK = 20
-MAX_TOKENS_RESPONSE = 256
+# ULTRA STRICT CONTEXT LIMITS - Micro summaries only (<80 chars)
+MAX_CONTEXT_CHARS = 80
+MAX_CONTEXT_ANALYZE = 120
+MAX_CONTEXT_BUILD = 100
+TIMEOUT_PRIMARY = 30  # Reduced from 45s
+TIMEOUT_FALLBACK = 15  # Reduced from 20s
+MAX_TOKENS_RESPONSE = 128  # Patch mode - only modified parts
 
 MAX_TOKENS = {
     "generate": MAX_TOKENS_RESPONSE,
     "debug":    MAX_TOKENS_RESPONSE,
     "explain":  MAX_TOKENS_RESPONSE,
-    "chat":     128,
+    "chat":     64,
 }
 
 # Cache settings
@@ -237,13 +237,36 @@ def _extract_code_from_tags(content: str) -> str:
 
 def _call_with_retry(role: str, messages: List[Dict], structured_context: str = "") -> str:
     """
-    ADAPTIVE EXECUTION ENGINE (v2.1):
-    1. Try Primary Model (45s timeout)
-    2. If Timeout/Error → Switch to Fallback (20s) with simplified prompt
+    ADAPTIVE EXECUTION ENGINE (v2.2) - HARD TIMEOUT WITH THREAD KILL
+    
+    REVERSE FALLBACK ORDER (CRITICAL):
+    1. Try Fallback Model FIRST (qwen2.5:0.5b, 10s) - fast attempt for 80% of tasks
+    2. If Fail → Switch to Primary (qwen2.5-coder:1.5b, 30s) - heavy lifting
     3. If Fail → Return partial result with warning
     
+    PATCH MODE: Output only modified parts, not full scripts.
     Enforces output guard: Extract content between <code> tags only.
     """
+    import threading
+    
+    def run_with_timeout(func, timeout_sec):
+        """Hard kill timeout using thread."""
+        result = {"data": None, "error": None}
+        
+        def target():
+            try:
+                result["data"] = func()
+            except Exception as e:
+                result["error"] = str(e)
+        
+        thread = threading.Thread(target=target)
+        thread.start()
+        thread.join(timeout_sec)
+        
+        if thread.is_alive():
+            return {"error": "HARD_TIMEOUT"}
+        return result
+    
     model = MODELS.get(role, MODELS["chat"])
     tokens = MAX_TOKENS.get(role, MAX_TOKENS_RESPONSE)
     
@@ -259,7 +282,39 @@ def _call_with_retry(role: str, messages: List[Dict], structured_context: str = 
     if not payload_msgs:
         return "No input provided."
     
-    # PRIMARY MODEL ATTEMPT (45s)
+    # FALLBACK MODEL FIRST (qwen2.5:0.5b, 10s) - Fast path for 80% of tasks
+    fallback_payload = {
+        "model": FALLBACK_MODEL,
+        "messages": [
+            {"role": "system", "content": "Output ONLY changed code lines between <code> tags. No full script."},
+            {"role": "user", "content": user_msg["content"] if user_msg else ""},
+        ],
+        "stream": False,
+        "options": {
+            "num_predict": min(tokens, 96),  # Even smaller for fallback
+            "temperature": 0.3,
+            "top_p": 0.9,
+            "repeat_penalty": 1.1,
+            "stop": ["User:", "Assistant:", "###"],
+        },
+    }
+    
+    try:
+        result = run_with_timeout(
+            lambda: requests.post(OLLAMA_URL, json=fallback_payload, timeout=10),
+            10
+        )
+        if result.get("error") != "HARD_TIMEOUT" and result.get("data"):
+            r = result["data"]
+            if hasattr(r, 'status_code') and r.status_code == 200:
+                content = r.json().get("message", {}).get("content", "").strip()
+                extracted = _extract_code_from_tags(content)
+                if extracted and len(extracted) > 10:  # Valid response
+                    return extracted
+    except Exception:
+        pass  # Will fall through to primary
+    
+    # PRIMARY MODEL ATTEMPT (qwen2.5-coder:1.5b, 30s) - Heavy lifting
     payload = {
         "model": model,
         "messages": payload_msgs,
@@ -274,47 +329,19 @@ def _call_with_retry(role: str, messages: List[Dict], structured_context: str = 
     }
     
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=TIMEOUT_PRIMARY)
-        if r.status_code == 200:
-            content = r.json().get("message", {}).get("content", "").strip()
-            return _extract_code_from_tags(content)
-    except requests.exceptions.Timeout:
-        pass  # Will fall through to fallback
-    except requests.exceptions.ConnectionError:
-        return "Error: Cannot connect to Ollama. Ensure 'ollama serve' is running and models are pulled (ollama pull qwen2.5-coder:1.5b-instruct-q4_k_m)."
+        result = run_with_timeout(
+            lambda: requests.post(OLLAMA_URL, json=payload, timeout=TIMEOUT_PRIMARY),
+            TIMEOUT_PRIMARY
+        )
+        if result.get("error") != "HARD_TIMEOUT" and result.get("data"):
+            r = result["data"]
+            if hasattr(r, 'status_code') and r.status_code == 200:
+                content = r.json().get("message", {}).get("content", "").strip()
+                return _extract_code_from_tags(content)
     except Exception:
-        pass  # Will fall through to fallback
+        pass
     
-    # FALLBACK MODEL ATTEMPT (20s) - Simplified prompt
-    fallback_payload = {
-        "model": FALLBACK_MODEL,
-        "messages": [
-            {"role": "system", "content": "Fix issue. Output code only between <code> tags."},
-            {"role": "user", "content": user_msg["content"] if user_msg else ""},
-        ],
-        "stream": False,
-        "options": {
-            "num_predict": tokens,
-            "temperature": 0.3,
-            "top_p": 0.9,
-            "repeat_penalty": 1.1,
-            "stop": ["User:", "Assistant:", "###"],
-        },
-    }
-    
-    try:
-        r = requests.post(OLLAMA_URL, json=fallback_payload, timeout=TIMEOUT_FALLBACK)
-        if r.status_code == 200:
-            content = r.json().get("message", {}).get("content", "").strip()
-            return _extract_code_from_tags(content)
-    except requests.exceptions.Timeout:
-        pass  # Will return final warning below
-    except requests.exceptions.ConnectionError:
-        pass  # Already reported in primary attempt
-    except Exception:
-        pass  # Will return final warning below
-    
-    return f"Warning: Both models timed out. Primary: {TIMEOUT_PRIMARY}s, Fallback: {TIMEOUT_FALLBACK}s. Ensure Ollama is running with 'ollama serve' and models are pulled."
+    return f"Warning: Both models failed. Fallback: 10s, Primary: {TIMEOUT_PRIMARY}s. Ensure Ollama is running ('ollama serve') and models pulled."
 
 
 def _call(role: str, messages: List[Dict]) -> str:
@@ -460,10 +487,10 @@ def _validate_gdscript(code: str) -> List[str]:
     return issues
 
 
-# ── System Prompts (v2.1 Micro-Reasoning) ─────────────────────────────────────
+# ── System Prompts (v2.2 Patch Mode) ─────────────────────────────────────
 
-_GENERATE_PROMPT = "Fix the issue using the strategy. Context: {structured_context}. Output: <code>FULL_SCRIPT</code>"
-_DEBUG_PROMPT = "Identify root cause. Context: {structured_context}. Output: <code>FIXED_SCRIPT</code>"
+_GENERATE_PROMPT = "Fix using strategy. Output ONLY changed functions/lines. Context: {structured_context}. Format: <code>PATCH</code>"
+_DEBUG_PROMPT = "Root cause + fix. Output ONLY modified code. Context: {structured_context}. Format: <code>PATCH</code>"
 
 
 def _generate(task: str, structured_context: str) -> Dict:

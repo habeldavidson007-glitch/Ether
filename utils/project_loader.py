@@ -438,7 +438,7 @@ class LazyProjectLoader:
             meta["loaded"] = False
 
 
-# ── SMART CONTEXT BUILDER (v2.1) ───────────────────────────────────────────────
+# ── SMART CONTEXT BUILDER (v2.2 Micro-Context) ─────────────────────────────────
 
 _GODOT_ISSUE_PATTERNS = {
     "missing_delta": [r"func\s+_process\s*\(", r"func\s+_physics_process\s*\("],
@@ -449,58 +449,46 @@ _GODOT_ISSUE_PATTERNS = {
 }
 
 _STRATEGY_MAP = {
-    "missing_delta": "Add delta parameter to function call",
-    "velocity_accumulation": "Reset velocity before accumulation or use move_and_slide properly",
-    "missing_signal": "Define signal at class level before emitting",
-    "hardcoded_value": "Use @export variable for configurable values",
-    "magic_number": "Extract to named constant or @export variable",
+    "missing_delta": "Add delta parameter",
+    "velocity_accumulation": "Reset velocity before accumulation",
+    "missing_signal": "Define signal at class level",
+    "hardcoded_value": "Use @export variable",
+    "magic_number": "Extract to named constant",
 }
 
 
 def build_structured_context(file_path: str, intent: str) -> str:
     """
-    SMART CONTEXT BUILDER (v2.1):
-    Returns ~150-char structured summary instead of raw code.
+    SMART CONTEXT BUILDER (v2.2) - MICRO CONTEXT (<80 chars)
     
-    Format:
-    File: {filename}
-    Node: {detected_node_type}
-    Issues: {python_detected_issues}
-    Strategy: {hardcoded_fix_strategy_based_on_intent}
+    Returns ultra-compact structured summary instead of raw code.
+    
+    Format (single line):
+    {filename}|{node_type}|{issues}|{strategy}
     """
     if not file_path:
-        return "No file context available."
+        return "No file context."
     
     filename = Path(file_path).name
     ext = Path(file_path).suffix.lower()
     
-    # Detect node type from filename/content
-    node_type = "Unknown"
-    if "player" in filename.lower():
-        node_type = "CharacterBody2D/3D"
-    elif "enemy" in filename.lower():
-        node_type = "CharacterBody2D/3D"
-    elif "ui" in filename.lower() or "hud" in filename.lower():
+    # Detect node type from filename (ultra-light)
+    node_type = "Script"
+    fn_lower = filename.lower()
+    if "player" in fn_lower or "enemy" in fn_lower:
+        node_type = "CharacterBody2D"
+    elif "ui" in fn_lower or "hud" in fn_lower:
         node_type = "Control"
-    elif "camera" in filename.lower():
-        node_type = "Camera2D/3D"
+    elif "camera" in fn_lower:
+        node_type = "Camera2D"
     elif ext == ".tscn":
         node_type = "Scene"
-    elif ext == ".gd":
-        node_type = "Script"
     
-    # Detect issues using static analysis (regex patterns)
+    # Detect issues using static analysis (regex patterns) - limit read
     issues = []
-    content = ""
-    
     try:
-        # Try to read file directly
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()[:2000]  # Limit read size
-        except:
-            content = ""
-        
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()[:500]  # Ultra-limit for speed
         for issue_name, patterns in _GODOT_ISSUE_PATTERNS.items():
             for pattern in patterns:
                 if re.search(pattern, content, re.IGNORECASE):
@@ -509,25 +497,22 @@ def build_structured_context(file_path: str, intent: str) -> str:
     except:
         pass
     
-    issues_str = ", ".join(issues[:3]) if issues else "None detected"
+    # Ultra-compact: first issue only, abbreviated
+    issues_str = issues[0][:15] if issues else "clean"
     
-    # Determine strategy based on intent and detected issues
-    strategy = "Apply standard fix pattern"
+    # Determine strategy based on intent (abbreviated)
+    strategy = "fix"
     if intent in ("build", "generate"):
-        strategy = "Create new script with proper Godot 4 structure"
-    elif intent == "debug":
-        if issues:
-            first_issue = issues[0]
-            strategy = _STRATEGY_MAP.get(first_issue, "Fix detected issue")
-        else:
-            strategy = "Diagnose and fix runtime error"
+        strategy = "create"
+    elif intent == "debug" and issues:
+        strategy = _STRATEGY_MAP.get(issues[0], "fix")[:20]
     elif intent in ("explain", "analyze"):
-        strategy = "Explain code structure and suggest improvements"
+        strategy = "explain"
     
-    # Build structured summary (~150 chars)
-    summary = f"File: {filename}\nNode: {node_type}\nIssues: {issues_str}\nStrategy: {strategy}"
+    # MICRO FORMAT: single line, pipe-separated (<80 chars)
+    summary = f"{filename}|{node_type}|{issues_str}|{strategy}"
     
-    return summary[:200]  # Hard cap at 200 chars
+    return summary[:80]  # Hard cap at 80 chars
 
 
 # ── Legacy Compatibility Functions ─────────────────────────────────────────────
