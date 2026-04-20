@@ -1,39 +1,21 @@
 ```
-# Python
-__pycache__/
+# Compiled Python files
 *.pyc
-*.pyo
-*.pyd
+__pycache__/
 
 # Backup files
 *.backup
 
-# Logs
+# Logs and temp files
 *.log
+*.tmp
 
-# Environment
+# Environment files
 .env
 .env.local
 *.env.*
 
-# Dependencies
-.venv/
-venv/
-pip-log.txt
-pip-selfcheck.json
-
-# Testing
-.coverage
-htmlcov/
-.coverage.*
-.cache
-.pytest_cache/
-.hypothesis/
-
-# IDE
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 ```

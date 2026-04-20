@@ -1,13 +1,22 @@
 """
-Ether v2.0 — AI Pipeline
-========================
+Ether v2.0 — AI Pipeline (Merged with v1.8 optimizations)
+==========================================================
 Multi-model, role-based, lazy execution.
 CPU-only. 2GB RAM safe. One model per request.
+
+OPTIMIZATIONS FROM v1.8:
+1. Response Cache with TTL and LRU eviction
+2. Fast-path predefined explanations for Godot terms
+3. Hybrid static analysis support
+4. Enhanced intent detection patterns
 """
 
 import json
 import re
+import time
+import hashlib
 import requests
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -39,8 +48,101 @@ MAX_TOKENS = {
     "chat":     192,
 }
 
+# Cache settings from v1.8
+CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
+MAX_CACHE_ENTRIES = 50   # Limit cache size to prevent memory bloat
 
-# ── Intent Detection (Fast Path) — PRESERVED ──────────────────────────────────
+
+# ── Cached Intelligence Layer (from v1.8) ──────────────────────────────────────
+
+class ResponseCache:
+    """
+    In-memory LRU cache with TTL (Time-To-Live).
+    Eviction policy: least-recently-accessed entry is removed when capacity is full.
+    Access time is updated on every successful get(), ensuring true LRU behaviour.
+    """
+
+    def __init__(self, ttl_seconds: int = CACHE_TTL_SECONDS, max_entries: int = MAX_CACHE_ENTRIES):
+        self.ttl = ttl_seconds
+        self.max_entries = max_entries
+        self._cache: Dict[str, Any] = {}
+        self._insert_time: Dict[str, float] = {}
+        self._access_time: Dict[str, float] = {}
+
+    def _make_key(self, query: str, intent: str, project_fingerprint: str) -> str:
+        """Create a unique cache key."""
+        normalized_query = ' '.join(query.lower().split())
+        key_data = f"{normalized_query}|{intent}|{project_fingerprint}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+
+    def get(self, query: str, intent: str, project_fingerprint: str) -> Optional[Any]:
+        """Get cached response if still valid. Updates LRU access time."""
+        key = self._make_key(query, intent, project_fingerprint)
+
+        if key not in self._cache:
+            return None
+
+        # Check TTL against insert time
+        if time.time() - self._insert_time.get(key, 0) > self.ttl:
+            self._cache.pop(key, None)
+            self._insert_time.pop(key, None)
+            self._access_time.pop(key, None)
+            return None
+
+        # Update access time so this entry is treated as recently used
+        self._access_time[key] = time.time()
+        return self._cache[key]
+
+    def set(self, query: str, intent: str, project_fingerprint: str, response: Any) -> None:
+        """Store response. Evicts least-recently-accessed entry when at capacity."""
+        key = self._make_key(query, intent, project_fingerprint)
+
+        # Evict LRU entry if at capacity
+        if len(self._cache) >= self.max_entries and key not in self._cache:
+            lru_key = min(
+                self._cache.keys(),
+                key=lambda k: self._access_time.get(k, self._insert_time.get(k, 0))
+            )
+            self._cache.pop(lru_key, None)
+            self._insert_time.pop(lru_key, None)
+            self._access_time.pop(lru_key, None)
+
+        now = time.time()
+        self._cache[key] = response
+        self._insert_time[key] = now
+        self._access_time[key] = now
+
+    def clear(self) -> None:
+        """Clear all cached entries."""
+        self._cache.clear()
+        self._insert_time.clear()
+        self._access_time.clear()
+
+    def stats(self) -> Dict[str, int]:
+        """Get cache statistics."""
+        return {
+            "entries": len(self._cache),
+            "max_entries": self.max_entries,
+        }
+
+
+# Global cache instance
+_response_cache = ResponseCache()
+
+
+def get_project_fingerprint(file_index: Dict[str, Any]) -> str:
+    """Generate a lightweight fingerprint of project state for cache invalidation."""
+    if not file_index:
+        return "empty"
+    
+    fingerprint_data = "|".join(
+        f"{path}:{meta.get('size', 0)}" 
+        for path, meta in sorted(file_index.items())
+    )
+    return hashlib.md5(fingerprint_data.encode()).hexdigest()[:16]
+
+
+# ── Intent Detection (Fast Path) — ENHANCED from v1.8 ──────────────────────────
 
 _GREETING_PATTERNS = [
     r'^\s*(hi|hello|hey|yo|hola|greetings)\b',
@@ -69,7 +171,7 @@ _EXPLAIN_RE    = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
 
 
 def detect_intent_fast(query: str) -> str:
-    """Regex-based fast intent. No LLM. PRESERVED from v1.9."""
+    """Regex-based fast intent. No LLM. Enhanced from v1.8."""
     q = query.strip()
     for p in _GREETING_RE:
         if p.match(q): return 'greeting'
@@ -83,7 +185,9 @@ def detect_intent_fast(query: str) -> str:
 
 
 def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> str:
-    """Instant responses — no LLM. PRESERVED from v1.9."""
+    """
+    Instant responses — no LLM. Enhanced from v1.8 with predefined Godot term explanations.
+    """
     if intent == 'greeting':
         return "Hello! I'm Ether, your Godot development assistant. How can I help?"
     elif intent == 'status':
@@ -95,6 +199,27 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
         return "No project loaded. Upload a ZIP to see project status."
     elif intent == 'quick_help':
         return "I can write GDScript, debug errors, or explain Godot concepts."
+    elif intent == 'explain':
+        # Fast path for simple definition/explanation questions (from v1.8)
+        query_lower = query.lower().strip()
+        
+        # Common Godot/game dev terms
+        explanations = {
+            "signal": "In Godot, signals are a way for nodes to emit events that other nodes can connect to. They enable loose coupling between objects.",
+            "node": "A Node is the basic building block in Godot. Everything in Godot is a Node - scenes, characters, UI elements, etc.",
+            "scene": "A Scene is a collection of nodes saved as a file. You can instance (reuse) scenes multiple times in your project.",
+            "export": "@export is a decorator in GDScript that exposes a variable to the Godot editor's Inspector panel.",
+            "gdscript": "GDScript is Godot's built-in scripting language. It's Python-like, designed specifically for Godot's API.",
+            "characterbody2d": "CharacterBody2D is a node type for 2D character movement with built-in collision detection.",
+            "area2d": "Area2D is a 2D node for detecting overlaps, collisions, and monitoring other objects entering/exiting its hitbox.",
+        }
+        
+        for term, definition in explanations.items():
+            if term in query_lower:
+                return f"**{term.title()}**: {definition}"
+        
+        return "I don't have a quick definition for that term. Try asking about specific Godot concepts."
+    
     return ""
 
 
@@ -437,3 +562,106 @@ def run_pipeline(
             return {"type": "chat", "text": text}, log
         except Exception as e:
             return {"type": "chat", "text": f"Error: {e}"}, log
+
+
+# ── Code Style Memory (ultra lightweight) ─────────────────────────────────────
+
+def get_code_style() -> str:
+    """
+    Lightweight code style memory.
+    No database. No embeddings. Under 5 lines.
+    """
+    return """
+- naming: snake_case
+- prefers_signals: true
+- node_type: CharacterBody2D
+"""
+
+
+# ── Project Pattern Awareness (ultra lightweight) ──────────────────────────────
+
+def get_pattern() -> str:
+    """
+    Ultra-lightweight project pattern hints.
+    Max 3-5 lines. No dynamic heavy analysis.
+    """
+    return """
+- modular scripts
+- signal-based communication
+"""
+
+
+# ── Role Mapping (Python-side only) ────────────────────────────────────────────
+
+def map_intent_to_role(intent: str) -> str:
+    """
+    Map intent to role. LLM must NOT perform classification.
+    Python controls routing.
+    """
+    if intent in ("build", "generate"):
+        return "GENERATE"
+    elif intent == "debug":
+        return "DEBUG"
+    elif intent in ("analyze", "explain"):
+        return "EXPLAIN"
+    else:
+        return "CHAT"
+
+
+# ── Refactored chat() Function — Execution Mode ────────────────────────────────
+
+def chat(message: str, history: List[Dict], context: str, role: str = "CHAT") -> str:
+    """
+    Refactored chat function — LLM as executor only.
+    
+    Constraints:
+    - LLM must NOT decide intent
+    - LLM must NOT simulate personality
+    - Single LLM call per request
+    """
+    # Truncate context to fit low-end hardware
+    context = context[:300] if len(context) > 300 else context
+    
+    # Select prompt based on role
+    from core.prompts import select_prompt, build_style_hints, build_pattern_hints
+    
+    # Get lightweight hints
+    style_hints = build_style_hints(None)  # Can be extended to use get_code_style()
+    pattern_hints = build_pattern_hints(None)  # Can be extended to use get_pattern()
+    
+    system, user = select_prompt(
+        role=role.lower(),
+        task=message,
+        context=context,
+        style_memory=None,
+        project_patterns=None
+    )
+    
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user}
+    ]
+    
+    # Use appropriate token limit
+    max_tokens = MAX_TOKENS.get(role.lower(), MAX_TOKENS["chat"])
+    
+    return _call(role.lower(), messages)
+
+
+# ── Smart Retry with Fallback Model (optional improvement) ─────────────────────
+
+def _call_with_retry(role: str, messages: List[Dict], fallback_model: str = "gemma:2b") -> str:
+    """
+    Smart retry: switch to smaller model on timeout.
+    """
+    result = _call(role, messages)
+    
+    if "Timeout" in result:
+        # Switch to fallback model
+        global MODELS
+        original_model = MODELS.get(role, MODELS["chat"])
+        MODELS[role] = fallback_model
+        result = _call(role, messages)
+        MODELS[role] = original_model  # Restore
+    
+    return result
