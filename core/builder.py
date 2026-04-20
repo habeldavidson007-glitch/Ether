@@ -26,10 +26,10 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 
 # One model per role. Only ONE loaded per request — never simultaneously.
 MODELS = {
-    "generate": "qwen2:1.5b",
+    "generate": "qwen2.5-coder:1.5b-instruct-q4_k_m",
     "debug":    "gemma:2b",
-    "explain":  "qwen2:1.5b",
-    "chat":     "qwen2:0.5b",
+    "explain":  "qwen2.5-coder:1.5b-instruct-q4_k_m",
+    "chat":     "qwen2.5-coder:1.5b-instruct-q4_k_m",
 }
 
 MAX_CONTEXT_CHARS = 500  # Hard cap. Do not raise.
