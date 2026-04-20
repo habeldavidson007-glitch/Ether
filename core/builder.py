@@ -665,3 +665,515 @@ def _call_with_retry(role: str, messages: List[Dict], fallback_model: str = "gem
         MODELS[role] = original_model  # Restore
     
     return result
+
+
+# ── System Prompts (from v1.8) ──────────────────────────────────────────────────
+
+_GODOT_SYSTEM = """You are Ether — a Godot 4 development assistant with deep GDScript expertise.
+
+Core rules:
+- Always use Godot 4 syntax (@export, @onready, func _ready, etc.)
+- Prefer signals over direct node coupling
+- snake_case for all names
+- Include type hints where helpful
+- Never hallucinate Unity, Unreal, or C# patterns
+- Generate COMPLETE files, never partial snippets"""
+
+_EXPERT_PERSONAS = {
+    "coding": """
+
+**Expert Persona: Coding Expert**
+You are a senior Godot developer with 10+ years of experience.
+- Write production-ready, optimized GDScript code
+- Follow best practices: SOLID principles, design patterns
+- Use strong typing, proper error handling
+- Code is clean, modular, and well-documented
+- Focus on implementation details and technical precision""",
+    "general": """
+
+**Expert Persona: General Expert**
+You are a game design and architecture consultant.
+- Explain concepts clearly with practical examples
+- Focus on game design patterns, architecture decisions
+- Provide high-level guidance and trade-offs
+- Help with project planning and organization
+- Balance theory with actionable advice""",
+    "mixed": """
+
+**Expert Persona: Mixed Mode**
+You adapt your response based on what the question needs.
+- For technical questions: provide code + explanation
+- For conceptual questions: explain then show examples
+- Balance depth with clarity
+- Match the user's level of expertise"""
+}
+
+_MODE_SUFFIX = {
+    "coding": "\n\nMode: CODING. Focus on code, scripts, and technical implementation. Be precise and direct.",
+    "general": "\n\nMode: GENERAL. Focus on concepts, design patterns, and high-level guidance. Explain clearly.",
+    "mixed": "\n\nMode: MIXED. Balance code and explanation based on what the question needs.",
+}
+
+_THINK_SYSTEM = _GODOT_SYSTEM + """
+
+Your job: analyze the request and project context.
+Output a JSON object:
+{
+  "understanding": "what the user actually wants",
+  "existing_relevant": ["list of relevant existing files"],
+  "missing": ["what needs to be created"],
+  "approach": "one sentence: the cleanest way to build this"
+}"""
+
+_PLAN_SYSTEM = _GODOT_SYSTEM + """
+
+Your job: produce a concrete file plan.
+Output a JSON object:
+{
+  "files": [
+    {
+      "path": "scripts/player.gd",
+      "action": "create or modify",
+      "purpose": "one sentence"
+    }
+  ],
+  "connections": ["signal x connects to y", "scene A instanced in B"],
+  "notes": "anything the user should know"
+}"""
+
+_BUILD_SYSTEM = _GODOT_SYSTEM + """
+
+Your job: generate complete, working file contents.
+Output ONLY a JSON object:
+{
+  "changes": [
+    {
+      "file": "scripts/player.gd",
+      "action": "create_or_modify",
+      "content": "# full file content here\\nextends CharacterBody2D\\n..."
+    }
+  ],
+  "summary": "what was built and how to use it"
+}
+
+Rules for content:
+- COMPLETE files only. Never use placeholders.
+- If modifying, include the full file with changes applied.
+- GDScript only."""
+
+_DEBUG_SYSTEM = _GODOT_SYSTEM + """
+
+Your job: diagnose and fix the error using the ACTUAL CODE provided.
+Reference specific file names, line patterns, and variable names from context.
+
+Output a JSON object:
+{
+  "root_cause": "specific issue found in the actual code",
+  "changes": [
+    {
+      "file": "path/to/file.gd",
+      "action": "create_or_modify",
+      "content": "complete fixed file content"
+    }
+  ],
+  "explanation": "why this specific fix works",
+  "prevention": "how to avoid this in future"
+}"""
+
+_ANALYZE_SYSTEM = _GODOT_SYSTEM + """
+
+Your job: analyze the ACTUAL PROJECT CODE provided and give specific findings.
+Reference specific file names, function names, and line patterns found in the code.
+
+Format your response as clear text:
+- Reference specific files and functions you found
+- List concrete issues with file+function references
+- List improvements with specific suggestions
+- Prioritize by impact"""
+
+_CHAT_SYSTEM = _GODOT_SYSTEM + """
+
+You are in conversational mode. Be direct, helpful, and specific to Godot.
+If project context is provided, reference the actual files and code patterns.
+No JSON output — just clear, useful text."""
+
+
+# ── Pipeline Steps (from v1.8) ──────────────────────────────────────────────────
+
+def think(task: str, context: str) -> Dict:
+    # Truncate context for thinking step
+    context_truncated = context[:600] if len(context) > 600 else context
+    
+    messages = [
+        {"role": "system", "content": _THINK_SYSTEM},
+        {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context_truncated}"}
+    ]
+    raw = _call("chat", messages)
+    result = _safe_json(raw)
+    if not result:
+        result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
+    return result
+
+
+def plan(task: str, thought: Dict, context: str) -> Dict:
+    # Truncate inputs for planning
+    context_truncated = context[:600] if len(context) > 600 else context
+    thought_str = json.dumps(thought, indent=2)[:300]
+    
+    messages = [
+        {"role": "system", "content": _PLAN_SYSTEM},
+        {"role": "user", "content": (
+            f"Task: {task}\n\n"
+            f"Analysis: {thought_str}\n\n"
+            f"Project context:\n{context_truncated}"
+        )}
+    ]
+    raw = _call("chat", messages)
+    result = _safe_json(raw)
+    if not result:
+        result = {"files": [], "connections": [], "notes": raw[:200]}
+    return result
+
+
+def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
+    # Truncate context heavily for build step
+    context_truncated = context[:1000] if len(context) > 1000 else context
+    
+    messages = [
+        {"role": "system", "content": _BUILD_SYSTEM},
+        {"role": "user", "content": (
+            f"Task: {task}\n\n"
+            f"Analysis: {json.dumps(thought, indent=2)[:400]}\n\n"  # Truncate thought
+            f"Plan: {json.dumps(blueprint, indent=2)[:400]}\n\n"   # Truncate plan
+            f"Existing code:\n{context_truncated}"
+        )}
+    ]
+    raw = _call("generate", messages)
+    result = _safe_json(raw)
+    if not result:
+        result = {
+            "changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}],
+            "summary": "Generated (raw fallback)"
+        }
+    return result
+
+
+def debug(error_log: str, context: str) -> Dict:
+    messages = [
+        {"role": "system", "content": _DEBUG_SYSTEM},
+        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1000]}"}
+    ]
+    raw = _call("debug", messages)
+    result = _safe_json(raw)
+    if not result:
+        result = {
+            "root_cause": "Parse failed — see raw output",
+            "changes": [],
+            "explanation": raw[:400],
+            "prevention": ""
+        }
+    return result
+
+
+def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixed") -> str:
+    """Analyze project with context - optimized for local models."""
+    mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
+    system = _ANALYZE_SYSTEM + mode_suffix
+    messages = [{"role": "system", "content": system}]
+    
+    # Add user message with context (if available)
+    if context and len(context) > 0:
+        # Truncate context aggressively for small model
+        max_context_len = 800
+        if len(context) > max_context_len:
+            context = context[:max_context_len] + "\n...(truncated)"
+        messages.append({"role": "user", "content": f"Task: {task}\n\nPROJECT CODE:\n{context}"})
+    else:
+        messages.append({"role": "user", "content": task})
+    
+    return _call("explain", messages)
+
+
+def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
+    # Expert persona system prompt - LIGHTWEIGHT version
+    persona = _EXPERT_PERSONAS.get(chat_mode, _EXPERT_PERSONAS["mixed"])
+    mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
+
+    # Simplified system prompt for faster response
+    system = _GODOT_SYSTEM + persona + mode_suffix + """
+
+You are helpful and conversational. Be friendly but concise."""
+
+    # Build messages with ONLY current message (no context to save tokens & speed)
+    messages = [{"role": "system", "content": system}]
+    messages.append({"role": "user", "content": message})
+
+    return _call("chat", messages)
+
+
+# ── EtherBrain: Main Engine Class (from v1.8) ──────────────────────────────────────
+
+class EtherBrain:
+    """
+    Ether v1.9 — Main Engine Class (Merged with v2.0 optimizations)
+    
+    Integrates:
+    1. Intent-Aware Routing (fast path for simple queries)
+    2. Lazy Loading Architecture (via project_loader)
+    3. Cached Intelligence Layer (TTL-based response cache)
+    4. v2.0 Role-based execution model
+    
+    Usage:
+        brain = EtherBrain()
+        brain.load_project_from_folder(path)
+        result = brain.process_query("Hello!", project_stats={})
+    """
+    
+    def __init__(self):
+        self.project_loader = None  # LazyProjectLoader instance
+        self.project_stats = {"script_count": 0, "scene_count": 0, "total_files": 0, "loaded_files": 0}
+        self.project_fingerprint = "empty"
+        self.history: List[Dict[str, str]] = []
+        self.chat_mode = "mixed"
+    
+    def load_project_from_zip(self, zip_data: bytes) -> Tuple[bool, str]:
+        """
+        Load project from ZIP using lazy loading.
+        Only indexes files, doesn't read content yet.
+        """
+        try:
+            from utils.project_loader import LazyProjectLoader
+            
+            self.project_loader = LazyProjectLoader()
+            success, msg = self.project_loader.load_from_zip(zip_data)
+            
+            if success:
+                self.project_stats = self.project_loader.get_stats()
+                self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+            
+            return success, msg
+        
+        except ImportError:
+            return False, "project_loader module not found"
+        except Exception as e:
+            return False, f"Load error: {str(e)}"
+    
+    def load_project_from_folder(self, folder_path: Path) -> Tuple[bool, str]:
+        """
+        Load project from a folder using lazy loading.
+        """
+        try:
+            from utils.project_loader import LazyProjectLoader
+            
+            self.project_loader = LazyProjectLoader()
+            success, msg = self.project_loader.load_from_folder(folder_path)
+            
+            if success:
+                self.project_stats = self.project_loader.get_stats()
+                self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+            
+            return success, msg
+        
+        except ImportError:
+            return False, "project_loader module not found"
+        except Exception as e:
+            return False, f"Load error: {str(e)}"
+    
+    def unload_project(self) -> None:
+        """Unload project and clear cache."""
+        if self.project_loader:
+            self.project_loader.unload_all()
+        self.project_loader = None
+        self.project_stats = {"script_count": 0, "scene_count": 0, "total_files": 0, "loaded_files": 0}
+        self.project_fingerprint = "empty"
+        _response_cache.clear()
+    
+    def process_query(self, query: str, yield_steps=None) -> Tuple[Dict, List[str]]:
+        """
+        Process a user query with intent-aware routing.
+        
+        Fast Path: Greetings, status, quick help → instant response (<2s)
+        Slow Path: Analysis, coding, debugging → full LLM pipeline
+        
+        Returns: (result_dict, log_list)
+        """
+        log = []
+        
+        def step(name: str):
+            log.append(name)
+            if yield_steps:
+                yield_steps(name)
+        
+        # STEP 1: Detect intent using fast regex patterns
+        fast_intent = detect_intent_fast(query)
+        
+        # STEP 2: Check cache for repeated queries (only for non-greeting intents)
+        if fast_intent != 'greeting':
+            cached = _response_cache.get(query, fast_intent, self.project_fingerprint)
+            if cached is not None:
+                step("⚡ Cache hit!")
+                return {"type": "chat", "text": cached, "cached": True}, log
+        
+        # STEP 3: Route based on intent
+        if fast_intent == 'greeting':
+            # FAST PATH: Instant greeting response
+            step("⚡ Fast path (greeting)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'status':
+            # FAST PATH: Status from cached stats (no LLM needed)
+            step("⚡ Fast path (status)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'quick_help':
+            # FAST PATH: Pre-defined help response
+            step("⚡ Fast path (help)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'explain':
+            # FAST PATH: Quick definition/explanation without LLM
+            step("⚡ Fast path (explain)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        else:
+            # SLOW PATH: Complex intent requires LLM
+            # Determine complex intent type (analyze, debug, build, chat)
+            complex_intent = self._classify_complex_intent(query)
+            
+            # Get context lazily (only loads relevant files)
+            context = ""
+            if self.project_loader:
+                step("📂 Loading relevant files...")
+                # ULTRA-LIGHTWEIGHT: Load minimal context for low-RAM systems
+                context = self.project_loader.build_lightweight_context(query, max_chars=400)
+                
+                self.project_stats = self.project_loader.get_stats()
+                self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+            
+            # Add memory context if available
+            memory_context = self._get_memory_context(query)
+            if memory_context:
+                context = memory_context + "\n\n" + context
+            
+            # Run appropriate pipeline
+            if complex_intent == 'analyze':
+                step("🔍 Analyzing project...")
+                try:
+                    # HYBRID STATIC ANALYSIS PIPELINE (v1.8)
+                    # Step 1: Run static analyzer first (instant, no LLM)
+                    static_report = ""
+                    if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
+                        from core.static_analyzer import StaticAnalyzer
+                        analyzer = StaticAnalyzer()
+                        static_report = analyzer.analyze(str(self.project_loader._base_path))
+                        step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
+                    
+                    # Step 2: Send ONLY the findings to LLM for friendly summary
+                    if static_report:
+                        llm_prompt = f"Here are the technical findings: {static_report}\n\nPlease summarize these for the user in 2-3 friendly sentences."
+                        text = analyze(llm_prompt, "", self.history, chat_mode=self.chat_mode)
+                    else:
+                        # Fallback if static analysis couldn't run
+                        text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    
+                    # Cache the result
+                    _response_cache.set(query, complex_intent, self.project_fingerprint, text)
+                    return {"type": "chat", "text": text}, log
+                except Exception as e:
+                    return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
+            
+            elif complex_intent == 'debug':
+                step("🔧 Debugging...")
+                try:
+                    result = debug(query, context)
+                    return {"type": "debug", **result}, log
+                except Exception as e:
+                    return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
+            
+            elif complex_intent == 'build':
+                step("🏗 Building...")
+                try:
+                    thought = think(query, context)
+                    step("Thinking...")
+                    blueprint = plan(query, thought, context)
+                    step("Planning...")
+                    result = build(query, thought, blueprint, context)
+                    step("Building...")
+                    return {"type": "build", "thought": thought, **result}, log
+                except Exception as e:
+                    return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+            
+            else:
+                # Default to chat - don't pass heavy context for casual chat
+                step("💬 Chatting...")
+                try:
+                    text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
+                               "", chat_mode=self.chat_mode)
+                    # Cache chat responses too
+                    _response_cache.set(query, complex_intent, self.project_fingerprint, text)
+                    return {"type": "chat", "text": text}, log
+                except Exception as e:
+                    return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
+    
+    def _classify_complex_intent(self, query: str) -> str:
+        """
+        Classify complex intents (after fast path filtering).
+        Returns: analyze, debug, build, or chat
+        """
+        query_lower = query.lower()
+        
+        # Debug keywords
+        if any(k in query_lower for k in ["fix", "bug", "error", "debug", "crash", "broken", "fail", "exception"]):
+            return "debug"
+        
+        # Build keywords
+        if any(k in query_lower for k in ["create", "make", "implement", "generate", "write", "add", "build", "new"]):
+            return "build"
+        
+        # Analyze keywords - be more specific to avoid catching casual questions
+        if any(k in query_lower for k in ["analyze", "list", "find", "show", "review", "check", 
+                                           "issues", "problems", "describe", "what do you think", 
+                                           "how is my", "rate my", "feedback on"]):
+            return "analyze"
+        
+        # Default to chat for general questions
+        return "chat"
+    
+    def _get_memory_context(self, query: str) -> str:
+        """Get relevant past interactions from memory."""
+        try:
+            from core.state import recall
+            hits = recall(query)
+            if not hits:
+                return ""
+            lines = ["Relevant past work:"]
+            for h in hits:
+                status = "✓" if h.get("success") else "✗"
+                lines.append(f"  {status} {h['task'][:100]} [{h.get('intent', '')}]")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+    
+    def add_to_history(self, role: str, content: str) -> None:
+        """Add a turn to conversation history."""
+        self.history.append({"role": role, "content": content})
+        # Cap history to prevent memory bloat
+        if len(self.history) > 40:  # Keep last 20 turns (user + assistant)
+            self.history = self.history[-40:]
+    
+    def set_chat_mode(self, mode: str) -> None:
+        """Set chat mode: coding, general, or mixed."""
+        if mode in ("coding", "general", "mixed"):
+            self.chat_mode = mode
+    
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Get cache statistics."""
+        return _response_cache.stats()
+    
+    def clear_cache(self) -> None:
+        """Clear the response cache."""
+        _response_cache.clear()
