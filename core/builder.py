@@ -280,6 +280,8 @@ def _call_with_retry(role: str, messages: List[Dict], structured_context: str = 
             return _extract_code_from_tags(content)
     except requests.exceptions.Timeout:
         pass  # Will fall through to fallback
+    except requests.exceptions.ConnectionError:
+        return "Error: Cannot connect to Ollama. Ensure 'ollama serve' is running and models are pulled (ollama pull qwen2.5-coder:1.5b-instruct-q4_k_m)."
     except Exception:
         pass  # Will fall through to fallback
     
@@ -307,6 +309,8 @@ def _call_with_retry(role: str, messages: List[Dict], structured_context: str = 
             return _extract_code_from_tags(content)
     except requests.exceptions.Timeout:
         pass  # Will return final warning below
+    except requests.exceptions.ConnectionError:
+        pass  # Already reported in primary attempt
     except Exception:
         pass  # Will return final warning below
     
@@ -1013,6 +1017,9 @@ class EtherBrain:
         # COMPLEX PATH: Build structured context and execute single LLM call
         step("Building context...")
         
+        # Classify complex intent (analyze, debug, build, chat)
+        complex_intent = self._classify_complex_intent(query)
+        
         # Get file path from project loader if available
         file_path = ""
         if self.project_loader:
@@ -1021,11 +1028,18 @@ class EtherBrain:
                 file_path = relevant_files[0]
                 if self.project_loader._mode == "folder" and self.project_loader._base_path:
                     file_path = str(self.project_loader._base_path / file_path)
+            else:
+                # FALLBACK: If no relevant files found, use first available script
+                script_paths = self.project_loader.get_script_paths()
+                if script_paths:
+                    file_path = script_paths[0]
+                    if self.project_loader._mode == "folder" and self.project_loader._base_path:
+                        file_path = str(self.project_loader._base_path / file_path)
         
-        structured_ctx = build_structured_context(file_path, intent)
+        structured_ctx = build_structured_context(file_path, complex_intent)
         
-        # Route to appropriate single-call handler based on intent
-        if intent in ("build", "generate") or "create" in query.lower() or "write" in query.lower():
+        # Route to appropriate single-call handler based on classified intent
+        if complex_intent == "build":
             step("Generating...")
             try:
                 result = _generate(query, structured_ctx)
@@ -1033,7 +1047,7 @@ class EtherBrain:
             except Exception as e:
                 return {"type": "chat", "text": f"Build error: {e}"}, log
         
-        elif intent == "debug" or "error" in query.lower() or "fix" in query.lower():
+        elif complex_intent == "debug":
             step("Debugging...")
             try:
                 result = _debug(query, structured_ctx)
@@ -1041,7 +1055,7 @@ class EtherBrain:
             except Exception as e:
                 return {"type": "chat", "text": f"Debug error: {e}"}, log
         
-        elif intent in ("explain", "analyze") or "analyze" in query.lower():
+        elif complex_intent == "analyze":
             step("Explaining...")
             try:
                 text = _explain(query, structured_ctx)
