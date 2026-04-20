@@ -7,11 +7,11 @@ OPTIMIZATIONS:
 2. Lazy Loading: Project files loaded on-demand, not all at once
 3. Cached Intelligence: Repeated queries return instantly from cache
 4. RAG-Enhanced Context: Semantic search retrieves relevant code snippets
-5. Balanced Model: qwen2.5-coder:3b-q3_K_S for better reasoning (~2.1GB)
+5. Lightweight Model: qwen2.5-coder:1.5b-instruct-q4_k_m (~1.2GB)
 6. CLI Native: Zero web framework overhead, minimal memory footprint
 7. HYBRID STATIC ANALYSIS: Instant GDScript anti-pattern detection (no LLM)
 8. SGMA INTEGRATION: Static Graph Analysis for dependency mapping
-9. MATH CURVE LOADERS: Memory-aware context selection for 4GB RAM systems
+9. ULTRA-LIGHT CONTEXT: 300 char limit for 2GB RAM systems
 
 Run: python ether_cli.py
 Requires: ollama serve && ollama pull qwen2.5-coder:1.5b-instruct-q4_k_m
@@ -40,10 +40,10 @@ class EtherCLI:
         print("  ◈ ETHER v1.9 CLI — Godot AI Development Assistant")
         print("=" * 70)
         print("\n  Local • Private • Advanced Code Analysis")
-        print("  Model: qwen2.5-coder:1.5b (~1.2GB quantized)")
+        print("  Model: qwen2.5-coder:1.5b-instruct-q4_k_m (~1.2GB quantized)")
         print("  Fallback: gemma:2b (auto-switch on timeout)")
-        print("\n  ⚡ NEW: Hybrid Static Analysis + SGMA + Math Curve Loaders!")
-        print("  🧠 Optimized for 4GB RAM - Instant Project Reviews")
+        print("\n  ⚡ NEW: Hybrid Static Analysis + SGMA + Ultra-Light Context!")
+        print("  🧠 Optimized for 2GB RAM - 300 char context limit")
         print("\n  Commands:")
         print("    /load <path>   — Load Godot project folder")
         print("    /status        — Show project stats")

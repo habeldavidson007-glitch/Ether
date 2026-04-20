@@ -32,20 +32,20 @@ MODELS = {
     "chat":     "qwen2.5-coder:1.5b-instruct-q4_k_m",
 }
 
-MAX_CONTEXT_CHARS = 500  # Hard cap. Do not raise.
+MAX_CONTEXT_CHARS = 300  # Hard cap for 1.5B models. Do not raise.
 
 TIMEOUT = {
-    "generate": 60,
-    "debug":    60,
-    "explain":  30,
-    "chat":     20,
+    "generate": 90,   # Increased for slower CPUs
+    "debug":    90,
+    "explain":  60,
+    "chat":     45,
 }
 
 MAX_TOKENS = {
-    "generate": 512,
-    "debug":    512,
-    "explain":  256,
-    "chat":     192,
+    "generate": 300,  # Reduced for 1.5B models
+    "debug":    300,
+    "explain":  150,
+    "chat":     128,
 }
 
 # Cache settings from v1.8
@@ -443,7 +443,7 @@ _CHAT_SYSTEM    = _GODOT_BASE + " Conversational mode. Direct and concise. Plain
 # ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 def _generate(task: str, context: str) -> Dict:
-    """GENERATE role → qwen2:1.5b"""
+    """GENERATE role → qwen2.5-coder:1.5b-instruct-q4_k_m"""
     ctx = _trim_context(context, task)
     user_content = f"Task: {task}\n\nContext:\n{ctx}" if ctx else f"Task: {task}"
     raw = _call("generate", [
@@ -478,7 +478,7 @@ def _debug(task: str, context: str) -> Dict:
 
 
 def _explain(task: str, context: str) -> str:
-    """EXPLAIN role → qwen2:1.5b. Plain text."""
+    """EXPLAIN role → qwen2.5-coder:1.5b-instruct-q4_k_m. Plain text."""
     ctx = _trim_context(context, task)
     user_content = f"{task}\n\nContext:\n{ctx}" if ctx else task
     return _call("explain", [
@@ -488,7 +488,7 @@ def _explain(task: str, context: str) -> str:
 
 
 def _chat(task: str) -> str:
-    """CHAT role → qwen2:0.5b. No context — fastest path."""
+    """CHAT role → qwen2.5-coder:1.5b-instruct-q4_k_m. No context — fastest path."""
     return _call("chat", [
         {"role": "system", "content": _CHAT_SYSTEM},
         {"role": "user",   "content": task},
@@ -510,10 +510,10 @@ def run_pipeline(
     Main pipeline. Signature unchanged from v1.9.
 
     Routing:
-        build/generate → _generate()        → qwen2:1.5b
+        build/generate → _generate()        → qwen2.5-coder:1.5b-instruct-q4_k_m
         debug          → _validate() first  → _debug() if issues → gemma:2b
-        explain/analyze→ _explain()         → qwen2:1.5b
-        casual/chat    → _chat()            → qwen2:0.5b
+        explain/analyze→ _explain()         → qwen2.5-coder:1.5b-instruct-q4_k_m
+        casual/chat    → _chat()            → qwen2.5-coder:1.5b-instruct-q4_k_m
 
     ONE model active per call. No parallel execution. No preloading.
     """
@@ -1048,8 +1048,8 @@ class EtherBrain:
             context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
-                # ULTRA-LIGHTWEIGHT: Load minimal context for low-RAM systems
-                context = self.project_loader.build_lightweight_context(query, max_chars=400)
+                # ULTRA-LIGHTWEIGHT: Load minimal context for 2GB RAM systems (300 chars max)
+                context = self.project_loader.build_lightweight_context(query, max_chars=300)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)

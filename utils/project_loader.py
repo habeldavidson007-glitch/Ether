@@ -359,11 +359,11 @@ class LazyProjectLoader:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in scored[:max_files]]
     
-    def build_lightweight_context(self, query: str, max_chars: int = 400) -> str:
+    def build_lightweight_context(self, query: str, max_chars: int = 300) -> str:
         """
-        ULTRA-LIGHTWEIGHT context builder for 4GB RAM systems.
-        Loads ONLY the single most relevant file snippet (max 400 chars).
-        This prevents timeouts on small models like 0.5B.
+        ULTRA-LIGHTWEIGHT context builder for 2GB RAM systems.
+        Loads ONLY the single most relevant file snippet (max 300 chars).
+        This prevents timeouts on small models like 1.5B.
         """
         # Find most relevant file using keyword matching (fastest method)
         relevant_paths = self.find_relevant_files(query, max_files=1)
@@ -377,7 +377,7 @@ class LazyProjectLoader:
         if not content:
             return ""
         
-        # Return only first 400 chars with clear labeling
+        # Return only first 300 chars with clear labeling
         snippet = content[:max_chars]
         return f"### Relevant code from {path}:\n{snippet}..."
     
