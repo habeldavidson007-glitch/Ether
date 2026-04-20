@@ -1,14 +1,14 @@
 """
-Ether v2.0 — AI Pipeline (Merged with v1.8 optimizations)
-==========================================================
-Multi-model, role-based, lazy execution.
-CPU-only. 2GB RAM safe. One model per request.
+Ether v2.1 — Constrained Intelligence Core
+==========================================
+Optimized for low-end hardware (2GB RAM, Windows).
+Philosophy: "Python THINKS (Analysis), LLM EXECUTES (Hands), System CONTROLS (Time)."
 
-OPTIMIZATIONS FROM v1.8:
-1. Response Cache with TTL and LRU eviction
-2. Fast-path predefined explanations for Godot terms
-3. Hybrid static analysis support
-4. Enhanced intent detection patterns
+Architecture:
+- Smart Context Builder: ~150-char structured summaries (not raw code)
+- Micro-Reasoning Prompts: Execution-only, no personas, no internal reasoning
+- Adaptive Execution: 45s primary, 20s fallback, hard timeouts
+- Single-call pipeline: No multi-stage chains
 """
 
 import json
@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# OPTIMIZED CONFIG FOR 2GB RAM - STRICT LIMITS TO PREVENT TIMEOUTS
+# V2.1 CONFIG FOR 2GB RAM - STRICT LIMITS
 PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
 FALLBACK_MODEL = "gemma:2b"
 
@@ -35,28 +35,22 @@ MODELS = {
     "chat":     PRIMARY_MODEL,
 }
 
-# STRICT CONTEXT LIMITS - Prevents timeout on 1.5B models
-MAX_CONTEXT_CHARS = 200      # Hard cap for most tasks
-MAX_CONTEXT_ANALYZE = 250    # Slightly more for analysis (max safe limit)
-MAX_CONTEXT_BUILD = 150      # Minimal context for generation
-
-TIMEOUT = {
-    "generate": 35,   # Strict timeout to force fallback quickly
-    "debug":    35,
-    "explain":  30,
-    "chat":     25,
-}
+# STRICT CONTEXT LIMITS - Structured summaries only
+MAX_CONTEXT_CHARS = 200
+TIMEOUT_PRIMARY = 45
+TIMEOUT_FALLBACK = 20
+MAX_TOKENS_RESPONSE = 256
 
 MAX_TOKENS = {
-    "generate": 150,  # Short, focused responses
-    "debug":    150,
-    "explain":  100,
-    "chat":     80,
+    "generate": MAX_TOKENS_RESPONSE,
+    "debug":    MAX_TOKENS_RESPONSE,
+    "explain":  MAX_TOKENS_RESPONSE,
+    "chat":     128,
 }
 
-# Cache settings from v1.8
-CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
-MAX_CACHE_ENTRIES = 50   # Limit cache size to prevent memory bloat
+# Cache settings
+CACHE_TTL_SECONDS = 300
+MAX_CACHE_ENTRIES = 50
 
 
 # ── Cached Intelligence Layer (from v1.8) ──────────────────────────────────────
@@ -229,28 +223,41 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
     return ""
 
 
-# ── Ollama Call — Role-Aware ───────────────────────────────────────────────────
+# ── Ollama Call — Adaptive Execution Engine ─────────────────────────────────────
 
-def _call(role: str, messages: List[Dict]) -> str:
-    """
-    Call Ollama with the model assigned to this role.
-    Includes smart retry with fallback model on timeout.
-    """
-    model   = MODELS.get(role, MODELS["chat"])
-    tokens  = MAX_TOKENS.get(role, 96)
-    timeout = TIMEOUT.get(role, 30)
+def _extract_code_from_tags(content: str) -> str:
+    """Extract content between <code> tags only."""
+    match = re.search(r'<code>(.*?)</code>', content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return content.strip()
 
-    # Keep only system + last user msg to minimize token pressure
+
+def _call_with_retry(role: str, messages: List[Dict], structured_context: str = "") -> str:
+    """
+    ADAPTIVE EXECUTION ENGINE (v2.1):
+    1. Try Primary Model (45s timeout)
+    2. If Timeout/Error → Switch to Fallback (20s) with simplified prompt
+    3. If Fail → Return partial result with warning
+    
+    Enforces output guard: Extract content between <code> tags only.
+    """
+    model = MODELS.get(role, MODELS["chat"])
+    tokens = MAX_TOKENS.get(role, MAX_TOKENS_RESPONSE)
+    
     system_msg = next((m for m in messages if m["role"] == "system"), None)
-    user_msg   = next((m for m in reversed(messages) if m["role"] == "user"), None)
-
+    user_msg = next((m for m in reversed(messages) if m["role"] == "user"), None)
+    
     payload_msgs = []
-    if system_msg: payload_msgs.append(system_msg)
-    if user_msg:   payload_msgs.append(user_msg)
-
+    if system_msg:
+        payload_msgs.append(system_msg)
+    if user_msg:
+        payload_msgs.append(user_msg)
+    
     if not payload_msgs:
         return "No input provided."
-
+    
+    # PRIMARY MODEL ATTEMPT (45s)
     payload = {
         "model": model,
         "messages": payload_msgs,
@@ -263,45 +270,28 @@ def _call(role: str, messages: List[Dict]) -> str:
             "stop": ["User:", "Assistant:", "###"],
         },
     }
-
-    try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
-        if r.status_code != 200:
-            error_msg = f"Ollama error {r.status_code}: {r.text[:200]}"
-            # Auto-retry with fallback model on error
-            if FALLBACK_MODEL and FALLBACK_MODEL != model:
-                return _call_with_fallback(role, messages, timeout, tokens)
-            return error_msg
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Empty response. Try again."
-    except requests.exceptions.Timeout:
-        # Auto-retry with fallback model on timeout
-        if FALLBACK_MODEL and FALLBACK_MODEL != model:
-            return _call_with_fallback(role, messages, timeout, tokens)
-        return f"Timeout ({timeout}s). Input too long or Ollama slow."
-    except requests.exceptions.ConnectionError:
-        return "Ollama not running. Start with: ollama serve"
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-
-def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: int) -> str:
-    """
-    Retry with fallback model when primary fails.
-    """
-    fallback_model = FALLBACK_MODEL
-    payload_msgs = [m for m in messages if m["role"] in ("system", "user")]
     
-    payload = {
-        "model": fallback_model,
-        "messages": payload_msgs,
+    try:
+        r = requests.post(OLLAMA_URL, json=payload, timeout=TIMEOUT_PRIMARY)
+        if r.status_code == 200:
+            content = r.json().get("message", {}).get("content", "").strip()
+            return _extract_code_from_tags(content)
+    except requests.exceptions.Timeout:
+        pass
+    except Exception:
+        pass
+    
+    # FALLBACK MODEL ATTEMPT (20s) - Simplified prompt
+    fallback_payload = {
+        "model": FALLBACK_MODEL,
+        "messages": [
+            {"role": "system", "content": "Fix issue. Output code only between <code> tags."},
+            {"role": "user", "content": user_msg["content"] if user_msg else ""},
+        ],
         "stream": False,
         "options": {
             "num_predict": tokens,
-            "temperature": 0.3,  # Slightly lower for stability
+            "temperature": 0.3,
             "top_p": 0.9,
             "repeat_penalty": 1.1,
             "stop": ["User:", "Assistant:", "###"],
@@ -309,18 +299,21 @@ def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: i
     }
     
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout * 1.2)  # Give fallback slightly more time
-        if r.status_code != 200:
-            return f"Fallback error {r.status_code}: {r.text[:200]}"
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Fallback empty response."
+        r = requests.post(OLLAMA_URL, json=fallback_payload, timeout=TIMEOUT_FALLBACK)
+        if r.status_code == 200:
+            content = r.json().get("message", {}).get("content", "").strip()
+            return _extract_code_from_tags(content)
     except requests.exceptions.Timeout:
-        return f"Timeout ({timeout}s). Both models timed out."
+        return f"Warning: Both models timed out. Primary: {TIMEOUT_PRIMARY}s, Fallback: {TIMEOUT_FALLBACK}s."
     except Exception as e:
-        return f"Fallback error: {str(e)}"
+        return f"Warning: Fallback failed: {str(e)}"
+    
+    return "Warning: All execution attempts failed."
+
+
+def _call(role: str, messages: List[Dict]) -> str:
+    """Legacy wrapper for backward compatibility. Use _call_with_retry for v2.1."""
+    return _call_with_retry(role, messages)
 
 
 # ── JSON Parsing ───────────────────────────────────────────────────────────────
@@ -390,13 +383,7 @@ def _trim_context(context: str, task: str, task_type: str = "default") -> str:
     if not context:
         return ""
     
-    # Adaptive limits based on task type
-    if task_type == "analyze":
-        max_chars = MAX_CONTEXT_ANALYZE
-    elif task_type in ("build", "generate"):
-        max_chars = MAX_CONTEXT_BUILD
-    else:
-        max_chars = MAX_CONTEXT_CHARS
+    max_chars = MAX_CONTEXT_CHARS
     
     keywords = set(re.findall(r'\w+', task.lower()))
     lines = context.splitlines()
@@ -467,36 +454,18 @@ def _validate_gdscript(code: str) -> List[str]:
     return issues
 
 
-# ── System Prompts ─────────────────────────────────────────────────────────────
+# ── System Prompts (v2.1 Micro-Reasoning) ─────────────────────────────────────
 
-_GODOT_BASE = (
-    "Godot 4 GDScript assistant. @export, @onready, snake_case. COMPLETE files only."
-)
-
-_BUILD_SYSTEM = _GODOT_BASE + """
-Output ONLY valid JSON:
-{"changes":[{"file":"path.gd","action":"create_or_modify","content":"full file"}],"summary":"what"}"""
-
-_DEBUG_SYSTEM = _GODOT_BASE + """
-Diagnose and fix. Output ONLY valid JSON:
-{"root_cause":"issue","changes":[{"file":"path.gd","action":"create_or_modify","content":"fixed"}],"explanation":"why"}"""
-
-_EXPLAIN_SYSTEM = _GODOT_BASE + " Answer clearly in 2-3 sentences max. Godot 4 API only."
-_CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text only."
+_GENERATE_PROMPT = "Fix the issue using the strategy. Context: {structured_context}. Output: <code>FULL_SCRIPT</code>"
+_DEBUG_PROMPT = "Identify root cause. Context: {structured_context}. Output: <code>FIXED_SCRIPT</code>"
 
 
-# ── Pipeline Steps ─────────────────────────────────────────────────────────────
-
-def _generate(task: str, context: str) -> Dict:
-    """GENERATE role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="build")[:150]  # Hard cap
-    user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
-    
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 GDScript. Output JSON:{\"changes\":[{\"file\":\"path.gd\",\"action\":\"create_or_modify\",\"content\":\"full file\"}],\"summary\":\"what changed\"}"
+def _generate(task: str, structured_context: str) -> Dict:
+    """GENERATE role - ultra-light for 1.5B models with micro-reasoning prompts."""
+    user_content = _GENERATE_PROMPT.format(structured_context=structured_context) if structured_context else f"Task:{task}"
     
     raw = _call("generate", [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": "Godot 4 GDScript. Output code between <code> tags."},
         {"role": "user",   "content": user_content},
     ])
     result = _safe_json(raw)
@@ -505,16 +474,12 @@ def _generate(task: str, context: str) -> Dict:
     return result
 
 
-def _debug(task: str, context: str) -> Dict:
-    """DEBUG role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="default")[:150]  # Hard cap
-    user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
-    
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 GDScript. Output JSON:{\"root_cause\":\"issue\",\"changes\":[{\"file\":\"path.gd\",\"content\":\"fixed\"}],\"explanation\":\"why\"}"
+def _debug(task: str, structured_context: str) -> Dict:
+    """DEBUG role - ultra-light for 1.5B models with micro-reasoning prompts."""
+    user_content = _DEBUG_PROMPT.format(structured_context=structured_context) if structured_context else f"Error:{task}"
     
     raw = _call("debug", [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": "Godot 4 GDScript. Output JSON with root_cause and changes."},
         {"role": "user",   "content": user_content},
     ])
     result = _safe_json(raw)
@@ -523,16 +488,12 @@ def _debug(task: str, context: str) -> Dict:
     return result
 
 
-def _explain(task: str, context: str) -> str:
-    """EXPLAIN role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="analyze")[:200]  # Slightly more for analysis
-    user_content = f"{task}\n{ctx}" if ctx else task
-    
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 expert. Analyze and optimize. Be specific about file names and line changes. 3 bullet points max."
+def _explain(task: str, structured_context: str) -> str:
+    """EXPLAIN role - ultra-light for 1.5B models."""
+    user_content = f"{task}\nContext:{structured_context}" if structured_context else task
     
     return _call("explain", [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": "Godot 4 expert. Be specific. 3 bullet points max."},
         {"role": "user",   "content": user_content},
     ])
 
@@ -540,33 +501,33 @@ def _explain(task: str, context: str) -> str:
 def _chat(task: str) -> str:
     """CHAT role — fastest path, no context"""
     return _call("chat", [
-        {"role": "system", "content": _CHAT_SYSTEM},
+        {"role": "system", "content": "Be direct and concise. Plain text only."},
         {"role": "user",   "content": task},
     ])
 
 
-# ── Public API — PRESERVED SIGNATURE ──────────────────────────────────────────
+# ── Public API — v2.1 PIPELINE REFACTOR ───────────────────────────────────────
 
 def run_pipeline(
     task: str,
     intent: str,
     context: str,
     history: List[Dict],
-    api_key: str = None,       # unused (Ollama local) — kept for app.py compat
+    api_key: str = None,
     yield_steps=None,
-    chat_mode: str = "mixed",  # unused — kept for app.py compat
+    chat_mode: str = "mixed",
 ) -> Tuple[Dict, List[str]]:
     """
-    Main pipeline. Signature unchanged from v1.9.
-
+    V2.1 PIPELINE REFACTOR - Single call only. No multi-stage chains.
+    
     Routing:
-        build/generate → _generate()        → qwen2.5-coder:1.5b-instruct-q4_k_m
-        debug          → _validate() first  → _debug() if issues → gemma:2b
-        explain/analyze→ _explain()         → qwen2.5-coder:1.5b-instruct-q4_k_m
-        casual/chat    → _chat()            → qwen2.5-coder:1.5b-instruct-q4_k_m
-
-    ONE model active per call. No parallel execution. No preloading.
+        Simple (greeting/status/quick_help) → Fast Path (0s, no LLM)
+        Complex → build_structured_context() → _call_with_retry()
+    
+    ONE LLM call per request. Python THINKS, LLM EXECUTES.
     """
+    from utils.project_loader import build_structured_context
+    
     log: List[str] = []
 
     def step(name: str):
@@ -574,25 +535,26 @@ def run_pipeline(
         if yield_steps:
             yield_steps(name)
 
+    # FAST PATH for simple intents (no LLM)
+    if intent in ('greeting', 'status', 'quick_help'):
+        return {"type": "chat", "text": get_fast_response(intent, task)}, log
+
+    # COMPLEX PATH: Build structured context and execute single LLM call
+    step("Building context...")
+    structured_ctx = build_structured_context(context, intent)
+    
     if intent in ("build", "generate"):
-        step("Building...")
+        step("Generating...")
         try:
-            result = _generate(task, context)
-            return {"type": "build", "thought": {}, **result}, log
+            result = _generate(task, structured_ctx)
+            return {"type": "build", **result}, log
         except Exception as e:
             return {"type": "chat", "text": f"Build error: {e}"}, log
 
     elif intent == "debug":
-        step("Validating...")
-        issues = _validate_gdscript(context) if context else []
-        if issues:
-            step(f"{len(issues)} issue(s) found — debugging...")
-            augmented = task + "\n\nStatic issues:\n" + "\n".join(f"- {i}" for i in issues)
-        else:
-            step("Debugging...")
-            augmented = task
+        step("Debugging...")
         try:
-            result = _debug(augmented, context)
+            result = _debug(task, structured_ctx)
             return {"type": "debug", **result}, log
         except Exception as e:
             return {"type": "chat", "text": f"Debug error: {e}"}, log
@@ -600,7 +562,7 @@ def run_pipeline(
     elif intent in ("explain", "analyze"):
         step("Explaining...")
         try:
-            text = _explain(task, context)
+            text = _explain(task, structured_ctx)
             return {"type": "chat", "text": text}, log
         except Exception as e:
             return {"type": "chat", "text": f"Explain error: {e}"}, log

@@ -438,6 +438,102 @@ class LazyProjectLoader:
             meta["loaded"] = False
 
 
+# ── SMART CONTEXT BUILDER (v2.1) ───────────────────────────────────────────────
+
+_GODOT_ISSUE_PATTERNS = {
+    "missing_delta": [r"func\s+_process\s*\(", r"func\s+_physics_process\s*\("],
+    "velocity_accumulation": [r"velocity\s*\+=", r"\.velocity\s*\+="],
+    "missing_signal": [r"emit_signal\s*\(", r"\.emit\s*\("],
+    "hardcoded_value": [r"=\s*\d+\.\d+", r"=\s*\d+\s*$"],
+    "magic_number": [r"if\s+\w+\s*[<>]=?\s*\d+"],
+}
+
+_STRATEGY_MAP = {
+    "missing_delta": "Add delta parameter to function call",
+    "velocity_accumulation": "Reset velocity before accumulation or use move_and_slide properly",
+    "missing_signal": "Define signal at class level before emitting",
+    "hardcoded_value": "Use @export variable for configurable values",
+    "magic_number": "Extract to named constant or @export variable",
+}
+
+
+def build_structured_context(file_path: str, intent: str) -> str:
+    """
+    SMART CONTEXT BUILDER (v2.1):
+    Returns ~150-char structured summary instead of raw code.
+    
+    Format:
+    File: {filename}
+    Node: {detected_node_type}
+    Issues: {python_detected_issues}
+    Strategy: {hardcoded_fix_strategy_based_on_intent}
+    """
+    if not file_path:
+        return "No file context available."
+    
+    filename = Path(file_path).name
+    ext = Path(file_path).suffix.lower()
+    
+    # Detect node type from filename/content
+    node_type = "Unknown"
+    if "player" in filename.lower():
+        node_type = "CharacterBody2D/3D"
+    elif "enemy" in filename.lower():
+        node_type = "CharacterBody2D/3D"
+    elif "ui" in filename.lower() or "hud" in filename.lower():
+        node_type = "Control"
+    elif "camera" in filename.lower():
+        node_type = "Camera2D/3D"
+    elif ext == ".tscn":
+        node_type = "Scene"
+    elif ext == ".gd":
+        node_type = "Script"
+    
+    # Detect issues using static analysis (regex patterns)
+    issues = []
+    content = ""
+    
+    try:
+        loader = LazyProjectLoader()
+        if file_path.endswith('.zip'):
+            pass
+        else:
+            # Try to read file directly
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()[:2000]  # Limit read size
+            except:
+                content = ""
+        
+        for issue_name, patterns in _GODOT_ISSUE_PATTERNS.items():
+            for pattern in patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    issues.append(issue_name)
+                    break
+    except:
+        pass
+    
+    issues_str = ", ".join(issues[:3]) if issues else "None detected"
+    
+    # Determine strategy based on intent and detected issues
+    strategy = "Apply standard fix pattern"
+    if intent in ("build", "generate"):
+        strategy = "Create new script with proper Godot 4 structure"
+    elif intent == "debug":
+        if issues:
+            first_issue = issues[0]
+            strategy = _STRATEGY_MAP.get(first_issue, "Fix detected issue")
+        else:
+            strategy = "Diagnose and fix runtime error"
+    elif intent in ("explain", "analyze"):
+        strategy = "Explain code structure and suggest improvements"
+    
+    # Build structured summary (~150 chars)
+    summary = f"File: {filename}\nNode: {node_type}\nIssues: {issues_str}\nStrategy: {strategy}"
+    
+    return summary[:200]  # Hard cap at 200 chars
+
+
 # ── Legacy Compatibility Functions ─────────────────────────────────────────────
 
 def extract_zip(data: bytes) -> Tuple[bool, str, Dict[str, str]]:
