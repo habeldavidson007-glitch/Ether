@@ -1,5 +1,5 @@
 """
-Ether v1.9 — Godot AI Development Assistant (CLI Edition)
+Ether v1.8 — Godot AI Development Assistant (CLI Edition)
 ==========================================================
 Full local mode: No Streamlit, no browser, pure terminal interface.
 OPTIMIZATIONS:
@@ -7,14 +7,12 @@ OPTIMIZATIONS:
 2. Lazy Loading: Project files loaded on-demand, not all at once
 3. Cached Intelligence: Repeated queries return instantly from cache
 4. RAG-Enhanced Context: Semantic search retrieves relevant code snippets
-5. Lightweight Model: qwen2.5-coder:1.5b-instruct-q4_k_m (~1.2GB)
+5. Balanced Model: qwen2.5-coder:3b-q3_K_S for better reasoning (~2.1GB)
 6. CLI Native: Zero web framework overhead, minimal memory footprint
 7. HYBRID STATIC ANALYSIS: Instant GDScript anti-pattern detection (no LLM)
-8. SGMA INTEGRATION: Static Graph Analysis for dependency mapping
-9. ULTRA-LIGHT CONTEXT: 300 char limit for 2GB RAM systems
 
 Run: python ether_cli.py
-Requires: ollama serve && ollama pull qwen2.5-coder:1.5b-instruct-q4_k_m
+Requires: ollama serve && ollama pull qwen2.5-coder:3b-instruct-q3_K_S
 """
 
 import sys
@@ -37,13 +35,11 @@ class EtherCLI:
         
         # Welcome message
         print("\n" + "=" * 70)
-        print("  ◈ ETHER v1.9 CLI — Godot AI Development Assistant")
+        print("  ◈ ETHER v1.8 CLI — Godot AI Development Assistant")
         print("=" * 70)
-        print("\n  Local • Private • Advanced Code Analysis")
-        print("  Model: qwen2.5-coder:1.5b-instruct-q4_k_m (~1.2GB quantized)")
-        print("  Fallback: gemma:2b (auto-switch on timeout)")
-        print("\n  ⚡ NEW: Hybrid Static Analysis + SGMA + Smart Context Loader!")
-        print("  🧠 Optimized for 2GB RAM - Adaptive context (300-600 chars)")
+        print("\n  Local • Private • Optimized for 4GB RAM")
+        print("  Model: qwen2.5-coder:3b-instruct-q3_K_S (~2.1GB)")
+        print("\n  ⚡ NEW: Hybrid Static Analysis - 95% faster project reviews!")
         print("\n  Commands:")
         print("    /load <path>   — Load Godot project folder")
         print("    /status        — Show project stats")
@@ -204,7 +200,7 @@ class EtherCLI:
         return True
     
     def chat(self, query: str):
-        """Send query to Ether and display response with change summary."""
+        """Send query to Ether and display response."""
         start_time = time.time()
         
         # Get response from brain using process_query
@@ -212,37 +208,15 @@ class EtherCLI:
         
         elapsed = time.time() - start_time
         
-        # Display response header
+        # Display response
         print(f"\n{'ETHER':<10} [{elapsed:.1f}s]")
         print("-" * 60)
         
-        # Extract text from result with safe fallback
-        response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
+        # Extract text from result
+        response = result.get("text", "No response generated.")
         
-        # If this is a build/debug response, show change summary first
-        if result.get("type") == "build" or result.get("type") == "debug":
-            changes = result.get("changes", [])
-            if changes:
-                print("\n📝 Changes Made:")
-                for change in changes[:5]:  # Show up to 5 changes
-                    file_path = change.get("file", "unknown.gd")
-                    action = change.get("action", "modify")
-                    
-                    # Analyze content for line changes (simple heuristic)
-                    content = change.get("content", "")
-                    if content:
-                        lines = content.split('\n')
-                        added = sum(1 for l in lines if l.strip() and not l.strip().startswith('#'))
-                        print(f"   • {file_path}: {action} ({added}+ lines)")
-                    else:
-                        print(f"   • {file_path}: {action}")
-                
-                if len(changes) > 5:
-                    print(f"   ... and {len(changes) - 5} more files")
-                print()
-        
-        # Display full response
-        lines = str(response).split('\n')
+        # Display response
+        lines = response.split('\n')
         for i, line in enumerate(lines):
             if i > 0 and i % 20 == 0:
                 # Pause for very long responses

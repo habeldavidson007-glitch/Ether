@@ -1,1 +1,4 @@
-(core/rag_index.py)
+```
+__pycache__/
+*.pyc
+```

@@ -1,14 +1,31 @@
 """
-Ether v2.0 — AI Pipeline (Merged with v1.8 optimizations)
-==========================================================
-Multi-model, role-based, lazy execution.
-CPU-only. 2GB RAM safe. One model per request.
+Ether v1.8 — AI Pipeline with Hybrid Static Analysis, Intent-Aware Routing & Lazy Loading
+===========================================================================================
+Model: qwen2.5-coder:3b-instruct-q3_K_S (balanced for 4GB RAM systems)
+No API key. No internet required.
 
-OPTIMIZATIONS FROM v1.8:
-1. Response Cache with TTL and LRU eviction
-2. Fast-path predefined explanations for Godot terms
-3. Hybrid static analysis support
-4. Enhanced intent detection patterns
+OPTIMIZATIONS IMPLEMENTED:
+1. HYBRID STATIC ANALYSIS: Pure Python GDScript anti-pattern detector (no LLM).
+   Scans 42 scripts in <1 second, reduces LLM context by ~95%.
+2. INTENT-AWARE ROUTING: Detect simple intents (greetings, status) via regex and route
+   to fast path with low token limits (64-192 tokens) and short timeouts (10s).
+3. LAZY LOADING: File content loaded only when needed (handled by project_loader.py).
+4. CACHED INTELLIGENCE: In-memory LRU cache with TTL for repeated queries.
+   Eviction policy: least-recently-accessed entry removed when capacity is full.
+5. RAG-ENHANCED CONTEXT: Semantic search retrieves most relevant code snippets
+   using TF-IDF vectorization and chunked document indexing.
+6. BALANCED MODEL: Upgraded to qwen2.5-coder:3b-q3_K_S for better reasoning
+   - Model size: ~2.1GB (q3_K_S quantized)
+   - Fits in 4GB RAM with careful memory management
+   - Much better code analysis than 0.5B models
+   - Aggressive context limiting to prevent OOM
+
+Performance Notes:
+- Greetings/status/help bypass the LLM entirely (fast path via regex).
+- Repeated queries return from cache without calling Ollama.
+- Project analysis now uses static analyzer first → instant feedback.
+- RAG context retrieval limited to 1 file, 300 chars max for speed.
+- Requires closing other apps to free RAM for the 3B model.
 """
 
 import json
@@ -18,62 +35,52 @@ import hashlib
 import requests
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from functools import lru_cache
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
+DEFAULT_MODEL = "qwen2.5-coder:3b-instruct-q3_K_S"  # Best balance: smart coding + fits 4GB RAM (~2.1GB)
 
-# OPTIMIZED CONFIG FOR 2GB RAM - STRICT LIMITS TO PREVENT TIMEOUTS
-PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
-FALLBACK_MODEL = "gemma:2b"
+# Timeout settings based on intent
+TIMEOUT_FAST = 10    # For greetings, simple chat
+TIMEOUT_NORMAL = 30  # For analysis (increased for v1.8 - model needs time to summarize findings)
+TIMEOUT_SLOW = 60    # For code generation, debugging (increased for v1.8)
 
-MODELS = {
-    "generate": PRIMARY_MODEL,
-    "debug":    PRIMARY_MODEL,
-    "explain":  PRIMARY_MODEL,
-    "chat":     PRIMARY_MODEL,
-}
+# Token limits based on intent
+MAX_TOKENS_FAST = 64     # Greetings, simple responses
+MAX_TOKENS_CHAT = 192    # General conversation
+MAX_TOKENS_ANALYZE = 256 # Analysis tasks (reduced for small model)
+MAX_TOKENS_BUILD = 512   # Code generation (reduced for small model)
 
-# STRICT CONTEXT LIMITS - Prevents timeout on 1.5B models
-MAX_CONTEXT_CHARS = 200      # Hard cap for most tasks
-MAX_CONTEXT_ANALYZE = 250    # Slightly more for analysis (max safe limit)
-MAX_CONTEXT_BUILD = 150      # Minimal context for generation
-
-TIMEOUT = {
-    "generate": 35,   # Strict timeout to force fallback quickly
-    "debug":    35,
-    "explain":  30,
-    "chat":     25,
-}
-
-MAX_TOKENS = {
-    "generate": 150,  # Short, focused responses
-    "debug":    150,
-    "explain":  100,
-    "chat":     80,
-}
-
-# Cache settings from v1.8
+# Cache settings
 CACHE_TTL_SECONDS = 300  # 5 minutes cache validity
 MAX_CACHE_ENTRIES = 50   # Limit cache size to prevent memory bloat
 
 
-# ── Cached Intelligence Layer (from v1.8) ──────────────────────────────────────
+# ── Cached Intelligence Layer ──────────────────────────────────────────────────
 
 class ResponseCache:
     """
+    OPTIMIZATION #3: Cached Intelligence Layer
+
     In-memory LRU cache with TTL (Time-To-Live).
     Eviction policy: least-recently-accessed entry is removed when capacity is full.
     Access time is updated on every successful get(), ensuring true LRU behaviour.
+
+    Cache key includes:
+    - Query text (normalized)
+    - Intent type
+    - Project fingerprint (based on file count and sizes)
     """
 
     def __init__(self, ttl_seconds: int = CACHE_TTL_SECONDS, max_entries: int = MAX_CACHE_ENTRIES):
         self.ttl = ttl_seconds
         self.max_entries = max_entries
         self._cache: Dict[str, Any] = {}
-        self._insert_time: Dict[str, float] = {}
-        self._access_time: Dict[str, float] = {}
+        self._insert_time: Dict[str, float] = {}   # when entry was stored
+        self._access_time: Dict[str, float] = {}   # when entry was last read
 
     def _make_key(self, query: str, intent: str, project_fingerprint: str) -> str:
         """Create a unique cache key."""
@@ -88,7 +95,7 @@ class ResponseCache:
         if key not in self._cache:
             return None
 
-        # Check TTL against insert time
+        # Check TTL against insert time (not access time — stale data is still stale)
         if time.time() - self._insert_time.get(key, 0) > self.ttl:
             self._cache.pop(key, None)
             self._insert_time.pop(key, None)
@@ -103,7 +110,7 @@ class ResponseCache:
         """Store response. Evicts least-recently-accessed entry when at capacity."""
         key = self._make_key(query, intent, project_fingerprint)
 
-        # Evict LRU entry if at capacity
+        # Evict LRU entry if at capacity (use access time, fall back to insert time)
         if len(self._cache) >= self.max_entries and key not in self._cache:
             lru_key = min(
                 self._cache.keys(),
@@ -137,10 +144,14 @@ _response_cache = ResponseCache()
 
 
 def get_project_fingerprint(file_index: Dict[str, Any]) -> str:
-    """Generate a lightweight fingerprint of project state for cache invalidation."""
+    """
+    Generate a lightweight fingerprint of project state for cache invalidation.
+    Based on file paths and sizes, not content (to avoid hashing large files).
+    """
     if not file_index:
         return "empty"
     
+    # Create a simple hash from file metadata
     fingerprint_data = "|".join(
         f"{path}:{meta.get('size', 0)}" 
         for path, meta in sorted(file_index.items())
@@ -148,576 +159,200 @@ def get_project_fingerprint(file_index: Dict[str, Any]) -> str:
     return hashlib.md5(fingerprint_data.encode()).hexdigest()[:16]
 
 
-# ── Intent Detection (Fast Path) — ENHANCED from v1.8 ──────────────────────────
+# ── Intent Detection (Fast Path) ───────────────────────────────────────────────
 
+# Regex patterns for fast intent detection (no LLM needed)
 _GREETING_PATTERNS = [
     r'^\s*(hi|hello|hey|yo|hola|greetings)\b',
     r'^\s*(good\s+(morning|afternoon|evening|night))\b',
     r'^\s*(how\s+are\s+you|whats?\s*up|sup|yo)\b',
 ]
+
 _STATUS_PATTERNS = [
     r'^\s*(status|stats)\b',
     r'\bhow\s+(many|much)\s+(scripts|scenes|files)\b',
     r'\bcount\s+(scripts|scenes|files)\b',
 ]
+
 _QUICK_HELP_PATTERNS = [
     r'^(help|what\s+can\s+you\s+do|commands|features)\b',
     r'^\s*thanks?\b',
     r'^(bye|goodbye|see\s+you|later)\b',
 ]
+
+# Simple definition/explanation requests - respond with fast path
 _EXPLAIN_PATTERNS = [
     r'^(what\s+is|define|explain)\s+',
     r'\s+mean(ing)?\s*[?]?\s*$',
 ]
 
-_GREETING_RE   = [re.compile(p, re.IGNORECASE) for p in _GREETING_PATTERNS]
-_STATUS_RE     = [re.compile(p, re.IGNORECASE) for p in _STATUS_PATTERNS]
+# Pre-compiled regexes for speed
+_GREETING_RE = [re.compile(p, re.IGNORECASE) for p in _GREETING_PATTERNS]
+_STATUS_RE = [re.compile(p, re.IGNORECASE) for p in _STATUS_PATTERNS]
 _QUICK_HELP_RE = [re.compile(p, re.IGNORECASE) for p in _QUICK_HELP_PATTERNS]
-_EXPLAIN_RE    = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
+_EXPLAIN_RE = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
 
 
 def detect_intent_fast(query: str) -> str:
-    """Regex-based fast intent. No LLM. Enhanced from v1.8."""
-    q = query.strip()
-    for p in _GREETING_RE:
-        if p.match(q): return 'greeting'
-    for p in _STATUS_RE:
-        if p.search(q): return 'status'
-    for p in _QUICK_HELP_RE:
-        if p.match(q) or p.search(q): return 'quick_help'
-    for p in _EXPLAIN_RE:
-        if p.search(q) and len(q) < 60: return 'explain'
+    """
+    OPTIMIZATION #1: Intent-Aware Routing (Fast Detection)
+    
+    Detect simple intents using regex patterns WITHOUT calling LLM.
+    Returns: 'greeting', 'status', 'quick_help', 'explain', or 'complex'
+    """
+    query_stripped = query.strip()
+    
+    # Check greetings first (most common fast path)
+    for pattern in _GREETING_RE:
+        if pattern.match(query_stripped):
+            return 'greeting'
+    
+    # Check status queries
+    for pattern in _STATUS_RE:
+        if pattern.search(query_stripped):
+            return 'status'
+    
+    # Check quick help
+    for pattern in _QUICK_HELP_RE:
+        if pattern.match(query_stripped) or pattern.search(query_stripped):
+            return 'quick_help'
+    
+    # Check simple explanation/definition requests (fast path for short answers)
+    for pattern in _EXPLAIN_RE:
+        if pattern.search(query_stripped):
+            # Only fast path if it's a short, simple question
+            if len(query_stripped) < 60:
+                return 'explain'
+    
     return 'complex'
 
 
-def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> str:
+def get_fast_response(intent: str, query: str, project_stats: Dict[str, int] = None) -> str:
     """
-    Instant responses — no LLM. Enhanced from v1.8 with predefined Godot term explanations.
+    Generate instant responses for simple intents without calling LLM.
+    This ensures greetings respond in <2 seconds.
     """
     if intent == 'greeting':
-        return "Hello! I'm Ether, your Godot development assistant. How can I help?"
+        return "Hello! I'm Ether, your Godot development assistant. How can I help with your project today?"
+    
     elif intent == 'status':
         if project_stats:
-            return (f"Project Status:\n"
-                    f"Scripts: {project_stats.get('script_count', 0)}\n"
-                    f"Scenes: {project_stats.get('scene_count', 0)}\n"
-                    f"Total Files: {project_stats.get('total_files', 0)}")
+            return (f"📊 Project Status:\n"
+                    f"• Scripts: {project_stats.get('script_count', 0)}\n"
+                    f"• Scenes: {project_stats.get('scene_count', 0)}\n"
+                    f"• Total Files: {project_stats.get('total_files', 0)}\n"
+                    f"• Loaded in Memory: {project_stats.get('loaded_files', 0)}")
         return "No project loaded. Upload a ZIP to see project status."
+    
     elif intent == 'quick_help':
-        return "I can write GDScript, debug errors, or explain Godot concepts."
+        return ("I can help you with:\n"
+                "• 📝 Writing GDScript code\n"
+                "• 🐛 Debugging errors\n"
+                "• 🔍 Analyzing your project\n"
+                "• 💡 Game design advice\n\n"
+                "Just ask me anything about your Godot project!")
+    
     elif intent == 'explain':
-        # Fast path for simple definition/explanation questions (from v1.8)
+        # Fast path for simple definition/explanation questions
+        # Provide brief, direct answers without LLM
         query_lower = query.lower().strip()
         
         # Common Godot/game dev terms
         explanations = {
-            "signal": "In Godot, signals are a way for nodes to emit events that other nodes can connect to. They enable loose coupling between objects.",
-            "node": "A Node is the basic building block in Godot. Everything in Godot is a Node - scenes, characters, UI elements, etc.",
-            "scene": "A Scene is a collection of nodes saved as a file. You can instance (reuse) scenes multiple times in your project.",
-            "export": "@export is a decorator in GDScript that exposes a variable to the Godot editor's Inspector panel.",
-            "gdscript": "GDScript is Godot's built-in scripting language. It's Python-like, designed specifically for Godot's API.",
-            "characterbody2d": "CharacterBody2D is a node type for 2D character movement with built-in collision detection.",
+            "repercussion": "Repercussion means a consequence or effect of an action or event. In game development, it often refers to the downstream impacts of a design decision (e.g., 'The repercussion of using global state is harder testing').",
+            "signal": "In Godot, signals are a way for nodes to emit events that other nodes can connect to. They enable loose coupling between objects (e.g., a button emitting 'pressed' signal).",
+            "node": "A Node is the basic building block in Godot. Everything in Godot is a Node - scenes, characters, UI elements, etc. Nodes are organized in a tree structure.",
+            "scene": "A Scene is a collection of nodes saved as a file. You can instance (reuse) scenes multiple times in your project. Think of it like a prefab in Unity.",
+            "export": "@export is a decorator in GDScript that exposes a variable to the Godot editor's Inspector panel, allowing designers to tweak values without code changes.",
+            "gdscript": "GDScript is Godot's built-in scripting language. It's Python-like, designed specifically for Godot's API and game development workflows.",
+            "characterbody2d": "CharacterBody2D is a node type for 2D character movement with built-in collision detection and movement methods like move_and_slide().",
             "area2d": "Area2D is a 2D node for detecting overlaps, collisions, and monitoring other objects entering/exiting its hitbox.",
         }
         
+        # Check if query matches known terms
         for term, definition in explanations.items():
             if term in query_lower:
                 return f"**{term.title()}**: {definition}"
         
-        return "I don't have a quick definition for that term. Try asking about specific Godot concepts."
+        # Generic fallback for unknown terms
+        return "I don't have a quick definition for that term. Try asking about specific Godot concepts like 'signal', 'node', 'scene', 'export', or 'CharacterBody2D'."
     
     return ""
 
 
-# ── Ollama Call — Role-Aware ───────────────────────────────────────────────────
+# ── Ollama Call Function ───────────────────────────────────────────────────────
 
-def _call(role: str, messages: List[Dict]) -> str:
+def _call(messages: List[Dict], max_tokens: int = 200, timeout: int = TIMEOUT_NORMAL) -> str:
     """
-    Call Ollama with the model assigned to this role.
-    Includes smart retry with fallback model on timeout.
+    Call Ollama API with configurable token limit and timeout.
+    Optimized for qwen2.5-coder:3b-instruct-q3_K_S model.
     """
-    model   = MODELS.get(role, MODELS["chat"])
-    tokens  = MAX_TOKENS.get(role, 96)
-    timeout = TIMEOUT.get(role, 30)
+    if not messages:
+        return "⚠ No input provided."
 
-    # Keep only system + last user msg to minimize token pressure
-    system_msg = next((m for m in messages if m["role"] == "system"), None)
-    user_msg   = next((m for m in reversed(messages) if m["role"] == "user"), None)
+    # 🔥 ONLY system + last user (to save context window)
+    system_msg = None
+    user_msg = None
 
-    payload_msgs = []
-    if system_msg: payload_msgs.append(system_msg)
-    if user_msg:   payload_msgs.append(user_msg)
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m
+        elif m["role"] == "user":
+            user_msg = m
 
-    if not payload_msgs:
-        return "No input provided."
+    messages = []
+    if system_msg:
+        messages.append(system_msg)
+    if user_msg:
+        messages.append(user_msg)
 
     payload = {
-        "model": model,
-        "messages": payload_msgs,
+        "model": DEFAULT_MODEL,
+        "messages": messages,
         "stream": False,
         "options": {
-            "num_predict": tokens,
+            "num_predict": max_tokens,
             "temperature": 0.4,
             "top_p": 0.9,
             "repeat_penalty": 1.05,
-            "stop": ["User:", "Assistant:", "###"],
+            "stop": ["User:", "Chatbot:", "Assistant:", "###", "\n\n"],
         },
     }
 
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
-        if r.status_code != 200:
-            error_msg = f"Ollama error {r.status_code}: {r.text[:200]}"
-            # Auto-retry with fallback model on error
-            if FALLBACK_MODEL and FALLBACK_MODEL != model:
-                return _call_with_fallback(role, messages, timeout, tokens)
-            return error_msg
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Empty response. Try again."
+        response = requests.post(
+            OLLAMA_URL,
+            json=payload,
+            timeout=timeout  # Configurable timeout based on intent
+        )
+
+        if response.status_code != 200:
+            return f"❌ Ollama error {response.status_code}: {response.text[:200]}"
+
+        data = response.json()
+        content = data.get("message", {}).get("content", "").strip()
+
+        # 🔥 CLEAN LOOP / WEIRD OUTPUT
+        for bad in ["User:", "Chatbot:", "Assistant:"]:
+            if bad in content:
+                content = content.split(bad)[0].strip()
+
+        if not content:
+            return "⚠ Empty response. Try again."
+
+        return content
+
     except requests.exceptions.Timeout:
-        # Auto-retry with fallback model on timeout
-        if FALLBACK_MODEL and FALLBACK_MODEL != model:
-            return _call_with_fallback(role, messages, timeout, tokens)
-        return f"Timeout ({timeout}s). Input too long or Ollama slow."
+        return f"❌ Timeout (model too slow, waited {timeout}s). Try shorter input or restart Ollama."
+
     except requests.exceptions.ConnectionError:
-        return "Ollama not running. Start with: ollama serve"
+        return "❌ Ollama not running. Start with: ollama serve"
+
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"❌ Error: {str(e)}"
 
 
-def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: int) -> str:
-    """
-    Retry with fallback model when primary fails.
-    """
-    fallback_model = FALLBACK_MODEL
-    payload_msgs = [m for m in messages if m["role"] in ("system", "user")]
-    
-    payload = {
-        "model": fallback_model,
-        "messages": payload_msgs,
-        "stream": False,
-        "options": {
-            "num_predict": tokens,
-            "temperature": 0.3,  # Slightly lower for stability
-            "top_p": 0.9,
-            "repeat_penalty": 1.1,
-            "stop": ["User:", "Assistant:", "###"],
-        },
-    }
-    
-    try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout * 1.2)  # Give fallback slightly more time
-        if r.status_code != 200:
-            return f"Fallback error {r.status_code}: {r.text[:200]}"
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Fallback empty response."
-    except requests.exceptions.Timeout:
-        return f"Timeout ({timeout}s). Both models timed out."
-    except Exception as e:
-        return f"Fallback error: {str(e)}"
-
-
-# ── JSON Parsing ───────────────────────────────────────────────────────────────
-
-def _safe_json(raw: str) -> Optional[Dict]:
-    """Parse JSON from model output. Handles fences and trailing commas."""
-    if not raw or not raw.strip():
-        return None
-    text = raw.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.S | re.I)
-        candidate = m.group(1) if m else None
-        if not candidate:
-            for i, ch in enumerate(text):
-                if ch != '{': continue
-                depth = 0
-                for j in range(i, len(text)):
-                    if text[j] == '{': depth += 1
-                    elif text[j] == '}':
-                        depth -= 1
-                        if depth == 0:
-                            candidate = text[i:j+1]
-                            break
-                if candidate: break
-        if not candidate:
-            return None
-        candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
-        candidate = re.sub(r'\bNone\b', 'null', candidate)
-        candidate = re.sub(r'\bTrue\b', 'true', candidate)
-        candidate = re.sub(r'\bFalse\b', 'false', candidate)
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            return None
-
-
-def _format_llm_result(result: Any) -> str:
-    """Format non-chat result dicts into readable text. PRESERVED."""
-    if not isinstance(result, dict):
-        return str(result)
-    if result.get("text"):        return str(result["text"])
-    if result.get("summary"):     return str(result["summary"])
-    if result.get("root_cause"):
-        out = str(result["root_cause"])
-        if result.get("explanation"):
-            out += "\n\n" + str(result["explanation"])
-        return out.strip()
-    if isinstance(result.get("changes"), list):
-        changes = result["changes"]
-        if not changes: return "No changes generated."
-        lines = ["Generated changes:"]
-        for c in changes[:5]:
-            lines.append(f"- {c.get('file','?')} ({c.get('action','')})")
-        return "\n".join(lines)
-    return "No response generated."
-
-
-# ── Context Trimmer — Lightweight ─────────────────────────────────────────────
-
-def _trim_context(context: str, task: str, task_type: str = "default") -> str:
-    """
-    Smart context trimmer - adaptive limits based on task type.
-    Prioritizes lines with task keywords — no RAG, no embeddings.
-    """
-    if not context:
-        return ""
-    
-    # Adaptive limits based on task type
-    if task_type == "analyze":
-        max_chars = MAX_CONTEXT_ANALYZE
-    elif task_type in ("build", "generate"):
-        max_chars = MAX_CONTEXT_BUILD
-    else:
-        max_chars = MAX_CONTEXT_CHARS
-    
-    keywords = set(re.findall(r'\w+', task.lower()))
-    lines = context.splitlines()
-    scored = sorted(
-        [(len(keywords & set(re.findall(r'\w+', l.lower()))), l) for l in lines],
-        reverse=True
-    )
-    result, total = [], 0
-    for _, line in scored:
-        if total + len(line) + 1 > max_chars:
-            break
-        result.append(line)
-        total += len(line) + 1
-    return "\n".join(result)
-
-
-# ── GDScript Validator — Pure Python ──────────────────────────────────────────
-
-def _validate_gdscript(code: str) -> List[str]:
-    """
-    Static analysis. No LLM. Returns issues list.
-    Expanded rules for Godot 4 compliance.
-    """
-    issues = []
-    lines  = code.splitlines()
-
-    if not any(l.strip().startswith("extends ") for l in lines):
-        issues.append("Missing 'extends' declaration")
-
-    indent_err = []
-    func_name, func_lines, func_has_return_type = "", [], False
-
-    for i, line in enumerate(lines, 1):
-        stripped = line.rstrip()
-        if not stripped or stripped.lstrip().startswith("#"):
-            continue
-
-        # Godot 4 syntax
-        if re.search(r'\bonready\b', stripped) and "@onready" not in stripped:
-            issues.append(f"Line {i}: use '@onready' (Godot 4)")
-        if re.search(r'^\s*export\s+var\b', stripped) and "@export" not in stripped:
-            issues.append(f"Line {i}: use '@export var' (Godot 4)")
-        if "emit_signal(" in stripped:
-            issues.append(f"Line {i}: use signal.emit() not emit_signal() (Godot 4)")
-        if re.search(r'\bsetget\b', stripped):
-            issues.append(f"Line {i}: use 'set/get:' blocks not 'setget' (Godot 4)")
-
-        # Indentation: tabs only
-        if line and line[0] == ' ' and stripped.lstrip():
-            indent_err.append(i)
-
-        # Function return type check
-        fm = re.match(r'^func\s+(\w+)\s*\(.*\)\s*(->\s*\S+)?\s*:', stripped)
-        if fm:
-            if func_name and func_has_return_type:
-                if not any("return" in fl for fl in func_lines):
-                    issues.append(f"Function '{func_name}': has return type but no return statement")
-            func_name = fm.group(1)
-            func_lines = []
-            ret_type = fm.group(2)
-            func_has_return_type = bool(ret_type and "void" not in ret_type)
-        else:
-            func_lines.append(stripped)
-
-    if indent_err:
-        issues.append(f"Lines {indent_err[:3]}: spaces found — GDScript requires tabs")
-
-    return issues
-
-
-# ── System Prompts ─────────────────────────────────────────────────────────────
-
-_GODOT_BASE = (
-    "Godot 4 GDScript assistant. @export, @onready, snake_case. COMPLETE files only."
-)
-
-_BUILD_SYSTEM = _GODOT_BASE + """
-Output ONLY valid JSON:
-{"changes":[{"file":"path.gd","action":"create_or_modify","content":"full file"}],"summary":"what"}"""
-
-_DEBUG_SYSTEM = _GODOT_BASE + """
-Diagnose and fix. Output ONLY valid JSON:
-{"root_cause":"issue","changes":[{"file":"path.gd","action":"create_or_modify","content":"fixed"}],"explanation":"why"}"""
-
-_EXPLAIN_SYSTEM = _GODOT_BASE + " Answer clearly in 2-3 sentences max. Godot 4 API only."
-_CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text only."
-
-
-# ── Pipeline Steps ─────────────────────────────────────────────────────────────
-
-def _generate(task: str, context: str) -> Dict:
-    """GENERATE role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="build")[:150]  # Hard cap
-    user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
-    
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 GDScript. Output JSON:{\"changes\":[{\"file\":\"path.gd\",\"action\":\"create_or_modify\",\"content\":\"full file\"}],\"summary\":\"what changed\"}"
-    
-    raw = _call("generate", [
-        {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": user_content},
-    ])
-    result = _safe_json(raw)
-    if not result:
-        result = {"changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}], "summary": "Generated"}
-    return result
-
-
-def _debug(task: str, context: str) -> Dict:
-    """DEBUG role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="default")[:150]  # Hard cap
-    user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
-    
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 GDScript. Output JSON:{\"root_cause\":\"issue\",\"changes\":[{\"file\":\"path.gd\",\"content\":\"fixed\"}],\"explanation\":\"why\"}"
-    
-    raw = _call("debug", [
-        {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": user_content},
-    ])
-    result = _safe_json(raw)
-    if not result:
-        result = {"root_cause": "See output", "changes": [], "explanation": raw.strip() or "No output"}
-    return result
-
-
-def _explain(task: str, context: str) -> str:
-    """EXPLAIN role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="analyze")[:200]  # Slightly more for analysis
-    user_content = f"{task}\n{ctx}" if ctx else task
-    
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 expert. Analyze and optimize. Be specific about file names and line changes. 3 bullet points max."
-    
-    return _call("explain", [
-        {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": user_content},
-    ])
-
-
-def _chat(task: str) -> str:
-    """CHAT role — fastest path, no context"""
-    return _call("chat", [
-        {"role": "system", "content": _CHAT_SYSTEM},
-        {"role": "user",   "content": task},
-    ])
-
-
-# ── Public API — PRESERVED SIGNATURE ──────────────────────────────────────────
-
-def run_pipeline(
-    task: str,
-    intent: str,
-    context: str,
-    history: List[Dict],
-    api_key: str = None,       # unused (Ollama local) — kept for app.py compat
-    yield_steps=None,
-    chat_mode: str = "mixed",  # unused — kept for app.py compat
-) -> Tuple[Dict, List[str]]:
-    """
-    Main pipeline. Signature unchanged from v1.9.
-
-    Routing:
-        build/generate → _generate()        → qwen2.5-coder:1.5b-instruct-q4_k_m
-        debug          → _validate() first  → _debug() if issues → gemma:2b
-        explain/analyze→ _explain()         → qwen2.5-coder:1.5b-instruct-q4_k_m
-        casual/chat    → _chat()            → qwen2.5-coder:1.5b-instruct-q4_k_m
-
-    ONE model active per call. No parallel execution. No preloading.
-    """
-    log: List[str] = []
-
-    def step(name: str):
-        log.append(name)
-        if yield_steps:
-            yield_steps(name)
-
-    if intent in ("build", "generate"):
-        step("Building...")
-        try:
-            result = _generate(task, context)
-            return {"type": "build", "thought": {}, **result}, log
-        except Exception as e:
-            return {"type": "chat", "text": f"Build error: {e}"}, log
-
-    elif intent == "debug":
-        step("Validating...")
-        issues = _validate_gdscript(context) if context else []
-        if issues:
-            step(f"{len(issues)} issue(s) found — debugging...")
-            augmented = task + "\n\nStatic issues:\n" + "\n".join(f"- {i}" for i in issues)
-        else:
-            step("Debugging...")
-            augmented = task
-        try:
-            result = _debug(augmented, context)
-            return {"type": "debug", **result}, log
-        except Exception as e:
-            return {"type": "chat", "text": f"Debug error: {e}"}, log
-
-    elif intent in ("explain", "analyze"):
-        step("Explaining...")
-        try:
-            text = _explain(task, context)
-            return {"type": "chat", "text": text}, log
-        except Exception as e:
-            return {"type": "chat", "text": f"Explain error: {e}"}, log
-
-    else:
-        step("Responding...")
-        try:
-            text = _chat(task)
-            return {"type": "chat", "text": text}, log
-        except Exception as e:
-            return {"type": "chat", "text": f"Error: {e}"}, log
-
-
-# ── Code Style Memory (ultra lightweight) ─────────────────────────────────────
-
-def get_code_style() -> str:
-    """
-    Lightweight code style memory.
-    No database. No embeddings. Under 5 lines.
-    """
-    return """
-- naming: snake_case
-- prefers_signals: true
-- node_type: CharacterBody2D
-"""
-
-
-# ── Project Pattern Awareness (ultra lightweight) ──────────────────────────────
-
-def get_pattern() -> str:
-    """
-    Ultra-lightweight project pattern hints.
-    Max 3-5 lines. No dynamic heavy analysis.
-    """
-    return """
-- modular scripts
-- signal-based communication
-"""
-
-
-# ── Role Mapping (Python-side only) ────────────────────────────────────────────
-
-def map_intent_to_role(intent: str) -> str:
-    """
-    Map intent to role. LLM must NOT perform classification.
-    Python controls routing.
-    """
-    if intent in ("build", "generate"):
-        return "GENERATE"
-    elif intent == "debug":
-        return "DEBUG"
-    elif intent in ("analyze", "explain"):
-        return "EXPLAIN"
-    else:
-        return "CHAT"
-
-
-# ── Refactored chat() Function — Execution Mode ────────────────────────────────
-
-def chat(message: str, history: List[Dict], context: str, role: str = "CHAT") -> str:
-    """
-    Refactored chat function — LLM as executor only.
-    
-    Constraints:
-    - LLM must NOT decide intent
-    - LLM must NOT simulate personality
-    - Single LLM call per request
-    """
-    # Truncate context to fit low-end hardware
-    context = context[:300] if len(context) > 300 else context
-    
-    # Select prompt based on role
-    from core.prompts import select_prompt, build_style_hints, build_pattern_hints
-    
-    # Get lightweight hints
-    style_hints = build_style_hints(None)  # Can be extended to use get_code_style()
-    pattern_hints = build_pattern_hints(None)  # Can be extended to use get_pattern()
-    
-    system, user = select_prompt(
-        role=role.lower(),
-        task=message,
-        context=context,
-        style_memory=None,
-        project_patterns=None
-    )
-    
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user}
-    ]
-    
-    # Use appropriate token limit
-    max_tokens = MAX_TOKENS.get(role.lower(), MAX_TOKENS["chat"])
-    
-    return _call(role.lower(), messages)
-
-
-# ── Smart Retry with Fallback Model (optional improvement) ─────────────────────
-
-def _call_with_retry(role: str, messages: List[Dict], fallback_model: str = "gemma:2b") -> str:
-    """
-    Smart retry: switch to smaller model on timeout.
-    """
-    result = _call(role, messages)
-    
-    if "Timeout" in result:
-        # Switch to fallback model
-        global MODELS
-        original_model = MODELS.get(role, MODELS["chat"])
-        MODELS[role] = fallback_model
-        result = _call(role, messages)
-        MODELS[role] = original_model  # Restore
-    
-    return result
-
-
-# ── System Prompts (from v1.8) ──────────────────────────────────────────────────
+# ── System Prompts ──────────────────────────────────────────────────────────────
 
 _GODOT_SYSTEM = """You are Ether — a Godot 4 development assistant with deep GDScript expertise.
 
@@ -729,6 +364,7 @@ Core rules:
 - Never hallucinate Unity, Unreal, or C# patterns
 - Generate COMPLETE files, never partial snippets"""
 
+# Expert personas for different modes
 _EXPERT_PERSONAS = {
     "coding": """
 
@@ -848,7 +484,7 @@ If project context is provided, reference the actual files and code patterns.
 No JSON output — just clear, useful text."""
 
 
-# ── Pipeline Steps (from v1.8) ──────────────────────────────────────────────────
+# ── Pipeline Steps ──────────────────────────────────────────────────────────────
 
 def think(task: str, context: str) -> Dict:
     # Truncate context for thinking step
@@ -858,7 +494,7 @@ def think(task: str, context: str) -> Dict:
         {"role": "system", "content": _THINK_SYSTEM},
         {"role": "user", "content": f"Task: {task}\n\nProject context:\n{context_truncated}"}
     ]
-    raw = _call("chat", messages)
+    raw = _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_FAST)
     result = _safe_json(raw)
     if not result:
         result = {"understanding": raw[:300], "existing_relevant": [], "missing": [], "approach": ""}
@@ -878,7 +514,7 @@ def plan(task: str, thought: Dict, context: str) -> Dict:
             f"Project context:\n{context_truncated}"
         )}
     ]
-    raw = _call("chat", messages)
+    raw = _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_NORMAL)
     result = _safe_json(raw)
     if not result:
         result = {"files": [], "connections": [], "notes": raw[:200]}
@@ -898,7 +534,7 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
             f"Existing code:\n{context_truncated}"
         )}
     ]
-    raw = _call("generate", messages)
+    raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -911,9 +547,9 @@ def build(task: str, thought: Dict, blueprint: Dict, context: str) -> Dict:
 def debug(error_log: str, context: str) -> Dict:
     messages = [
         {"role": "system", "content": _DEBUG_SYSTEM},
-        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1000]}"}
+        {"role": "user", "content": f"Error/task:\n{error_log}\n\nACTUAL PROJECT CODE:\n{context[:1000]}"}  # Truncate context
     ]
-    raw = _call("debug", messages)
+    raw = _call(messages, max_tokens=MAX_TOKENS_BUILD, timeout=TIMEOUT_SLOW)
     result = _safe_json(raw)
     if not result:
         result = {
@@ -941,11 +577,11 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call("explain", messages)
+    return _call(messages, max_tokens=MAX_TOKENS_ANALYZE, timeout=TIMEOUT_SLOW)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
-    # Expert persona system prompt - LIGHTWEIGHT version
+    # Expert persona system prompt - LIGHTWEIGHT version for 0.5b
     persona = _EXPERT_PERSONAS.get(chat_mode, _EXPERT_PERSONAS["mixed"])
     mode_suffix = _MODE_SUFFIX.get(chat_mode, _MODE_SUFFIX["mixed"])
 
@@ -958,24 +594,76 @@ You are helpful and conversational. Be friendly but concise."""
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": message})
 
-    return _call("chat", messages)
+    return _call(messages, max_tokens=MAX_TOKENS_CHAT, timeout=TIMEOUT_NORMAL)
+
+def run_pipeline(task: str, intent: str, context: str,
+                 history: List[Dict],
+                 api_key: str = None,
+                 yield_steps=None,
+                 chat_mode: str = "mixed") -> Tuple[Dict, List[str]]:
+
+    log = []
+
+    def step(name: str):
+        log.append(name)
+        if yield_steps:
+            yield_steps(name)
+
+    # Route based on intent
+    if intent == "analyze":
+        step("🔍 Analyzing project...")
+        try:
+            text = analyze(task, context, history, chat_mode=chat_mode)
+            return {"type": "chat", "text": text}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
+    
+    elif intent == "debug":
+        step("🔧 Debugging...")
+        try:
+            result = debug(task, context)
+            return {"type": "debug", **result}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
+    
+    elif intent == "build":
+        step("🏗 Building...")
+        try:
+            thought = think(task, context)
+            step("Thinking...")
+            blueprint = plan(task, thought, context)
+            step("Planning...")
+            result = build(task, thought, blueprint, context)
+            step("Building...")
+            return {"type": "build", "thought": thought, **result}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+    
+    else:
+        # casual or default -> chat
+        step("⚡ Quick response...")
+        try:
+            # For chat, don't pass heavy context - just use history
+            text = chat(task, history[-4:] if len(history) >= 4 else history, "", chat_mode=chat_mode)
+            return {"type": "chat", "text": text}, log
+        except Exception as e:
+            return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
 
 
-# ── EtherBrain: Main Engine Class (from v1.8) ──────────────────────────────────────
+# ── EtherBrain: Main Engine Class ──────────────────────────────────────────────
 
 class EtherBrain:
     """
-    Ether v1.9 — Main Engine Class (Merged with v2.0 optimizations)
+    Ether v1.3 — Main Engine Class
     
-    Integrates:
+    Integrates all three optimizations:
     1. Intent-Aware Routing (fast path for simple queries)
     2. Lazy Loading Architecture (via project_loader)
     3. Cached Intelligence Layer (TTL-based response cache)
-    4. v2.0 Role-based execution model
     
     Usage:
         brain = EtherBrain()
-        brain.load_project_from_folder(path)
+        brain.load_project_from_zip(zip_data)
         result = brain.process_query("Hello!", project_stats={})
     """
     
@@ -1098,16 +786,9 @@ class EtherBrain:
             context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
-                # SMART CONTEXT LOADING - Adaptive based on intent type
-                if complex_intent == 'analyze':
-                    # Analysis benefits from more context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_ANALYZE)
-                elif complex_intent == 'build':
-                    # Build needs focused context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_BUILD)
-                else:
-                    # Default balanced context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_CHARS)
+                # ULTRA-LIGHTWEIGHT: Load minimal context for 0.5b model to prevent timeouts
+                # Only 400 chars from 1 file - this is critical for fast response on low-RAM systems
+                context = self.project_loader.build_lightweight_context(query, max_chars=400)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
@@ -1131,6 +812,7 @@ class EtherBrain:
                         step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
                     
                     # Step 2: Send ONLY the findings to LLM for friendly summary
+                    # This reduces context by ~95% compared to sending all source code
                     if static_report:
                         llm_prompt = f"Here are the technical findings: {static_report}\n\nPlease summarize these for the user in 2-3 friendly sentences."
                         text = analyze(llm_prompt, "", self.history, chat_mode=self.chat_mode)
