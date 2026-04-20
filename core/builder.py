@@ -37,6 +37,8 @@ MODELS = {
 
 # STRICT CONTEXT LIMITS - Structured summaries only
 MAX_CONTEXT_CHARS = 200
+MAX_CONTEXT_ANALYZE = 400  # Analysis benefits from more context
+MAX_CONTEXT_BUILD = 300    # Build needs focused context
 TIMEOUT_PRIMARY = 45
 TIMEOUT_FALLBACK = 20
 MAX_TOKENS_RESPONSE = 256
