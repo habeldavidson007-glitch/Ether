@@ -14,7 +14,7 @@ OPTIMIZATIONS:
 9. MATH CURVE LOADERS: Memory-aware context selection for 4GB RAM systems
 
 Run: python ether_cli.py
-Requires: ollama serve && ollama pull mistral:7b
+Requires: ollama serve && ollama pull qwen2.5-coder:1.5b-instruct-q4_k_m
 """
 
 import sys
@@ -40,7 +40,8 @@ class EtherCLI:
         print("  ◈ ETHER v1.9 CLI — Godot AI Development Assistant")
         print("=" * 70)
         print("\n  Local • Private • Advanced Code Analysis")
-        print("  Model: mistral:7b (~5GB quantized)")
+        print("  Model: qwen2.5-coder:1.5b (~1.2GB quantized)")
+        print("  Fallback: gemma:2b (auto-switch on timeout)")
         print("\n  ⚡ NEW: Hybrid Static Analysis + SGMA + Math Curve Loaders!")
         print("  🧠 Optimized for 4GB RAM - Instant Project Reviews")
         print("\n  Commands:")
