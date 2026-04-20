@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# OPTIMIZED CONFIG FOR 2GB RAM - BALANCED APPROACH
+# OPTIMIZED CONFIG FOR 2GB RAM - STRICT LIMITS TO PREVENT TIMEOUTS
 PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
 FALLBACK_MODEL = "gemma:2b"
 
@@ -35,23 +35,23 @@ MODELS = {
     "chat":     PRIMARY_MODEL,
 }
 
-# SMART CONTEXT LIMITS - Adaptive based on task type
-MAX_CONTEXT_CHARS = 400      # Base limit for most tasks
-MAX_CONTEXT_ANALYZE = 600    # More context for analysis (still safe)
-MAX_CONTEXT_BUILD = 300      # Less context for generation (faster)
+# STRICT CONTEXT LIMITS - Prevents timeout on 1.5B models
+MAX_CONTEXT_CHARS = 200      # Hard cap for most tasks
+MAX_CONTEXT_ANALYZE = 250    # Slightly more for analysis (max safe limit)
+MAX_CONTEXT_BUILD = 150      # Minimal context for generation
 
 TIMEOUT = {
-    "generate": 50,   # Balanced timeout
-    "debug":    50,
-    "explain":  40,
-    "chat":     30,
+    "generate": 35,   # Strict timeout to force fallback quickly
+    "debug":    35,
+    "explain":  30,
+    "chat":     25,
 }
 
 MAX_TOKENS = {
-    "generate": 256,  # Enough for useful code snippets
-    "debug":    256,
-    "explain":  128,
-    "chat":     96,
+    "generate": 150,  # Short, focused responses
+    "debug":    150,
+    "explain":  100,
+    "chat":     80,
 }
 
 # Cache settings from v1.8
@@ -488,8 +488,8 @@ _CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text 
 # ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 def _generate(task: str, context: str) -> Dict:
-    """GENERATE role - balanced for useful output"""
-    ctx = _trim_context(context, task, task_type="generate")
+    """GENERATE role - ultra-light for 1.5B models"""
+    ctx = _trim_context(context, task, task_type="build")[:150]  # Hard cap
     user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
     raw = _call("generate", [
         {"role": "system", "content": _BUILD_SYSTEM},
@@ -502,8 +502,8 @@ def _generate(task: str, context: str) -> Dict:
 
 
 def _debug(task: str, context: str) -> Dict:
-    """DEBUG role - balanced for useful fixes"""
-    ctx = _trim_context(context, task, task_type="default")
+    """DEBUG role - ultra-light for 1.5B models"""
+    ctx = _trim_context(context, task, task_type="default")[:150]  # Hard cap
     user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
     raw = _call("debug", [
         {"role": "system", "content": _DEBUG_SYSTEM},
@@ -516,8 +516,8 @@ def _debug(task: str, context: str) -> Dict:
 
 
 def _explain(task: str, context: str) -> str:
-    """EXPLAIN role - balanced for clear answers"""
-    ctx = _trim_context(context, task, task_type="analyze")
+    """EXPLAIN role - ultra-light for 1.5B models"""
+    ctx = _trim_context(context, task, task_type="analyze")[:200]  # Slightly more for analysis
     user_content = f"{task}\n{ctx}" if ctx else task
     return _call("explain", [
         {"role": "system", "content": _EXPLAIN_SYSTEM},
