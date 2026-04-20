@@ -359,27 +359,77 @@ class LazyProjectLoader:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in scored[:max_files]]
     
-    def build_lightweight_context(self, query: str, max_chars: int = 200) -> str:
+    def build_lightweight_context(self, query: str, max_chars: int = 400) -> str:
         """
-        ULTRA-LIGHTWEIGHT context builder for 2GB RAM systems.
-        Loads ONLY the single most relevant file snippet (max 200 chars).
-        This prevents timeouts on small models like 1.5B.
+        SMART CONTEXT BUILDER for 2GB RAM systems.
+        Loads the most relevant file(s) with intelligent chunking.
+        
+        Strategy:
+        1. Find top 2 relevant files (not just 1)
+        2. Extract keyword-rich lines from each (not just first N chars)
+        3. Return structured context with file names and key functions
+        
+        This gives better results than blind truncation while staying fast.
         """
-        # Find most relevant file using keyword matching (fastest method)
-        relevant_paths = self.find_relevant_files(query, max_files=1)
+        # Find top 2 relevant files using keyword matching
+        relevant_paths = self.find_relevant_files(query, max_files=2)
         
         if not relevant_paths:
             return ""
         
-        path = relevant_paths[0]
-        content = self.get_content(path)
+        chunks = []
+        total_chars = 0
         
-        if not content:
+        for path in relevant_paths:
+            content = self.get_content(path)
+            if not content:
+                continue
+            
+            # Smart extraction: find lines related to query keywords
+            query_words = [w.lower() for w in query.split() if len(w) > 3]
+            lines = content.splitlines()
+            scored_lines = []
+            
+            for i, line in enumerate(lines):
+                score = sum(1 for word in query_words if word in line.lower())
+                if score > 0:
+                    scored_lines.append((score, i, line))
+            
+            # If no matching lines, take function definitions + first few lines
+            if not scored_lines:
+                # Look for func definitions
+                func_lines = [(2, i, line) for i, line in enumerate(lines) if line.strip().startswith('func ')]
+                # Add extends line if exists
+                extends_line = [(3, 0, lines[0])] if lines and lines[0].strip().startswith('extends') else []
+                scored_lines = func_lines[:5] + extends_line
+            
+            # Sort by score and take top lines
+            scored_lines.sort(key=lambda x: (-x[0], x[1]))
+            selected = scored_lines[:8]  # Take up to 8 relevant lines per file
+            
+            # Build formatted chunk
+            if selected:
+                chunk_lines = [f"\n--- {path} ---"]
+                chunk_chars = len(chunk_lines[0])
+                
+                for _, line_idx, line_text in sorted(selected, key=lambda x: x[1]):
+                    if chunk_chars + len(line_text) + 1 < max_chars // 2:  # Half budget per file
+                        chunk_lines.append(line_text)
+                        chunk_chars += len(line_text) + 1
+                
+                if len(chunk_lines) > 1:
+                    chunks.append("\n".join(chunk_lines))
+                    total_chars += chunk_chars
+        
+        if not chunks:
+            # Fallback: return first N chars of most relevant file
+            path = relevant_paths[0]
+            content = self.get_content(path)
+            if content:
+                return f"Code[{path}]: {content[:max_chars]}..."
             return ""
         
-        # Return only first 200 chars with clear labeling
-        snippet = content[:max_chars]
-        return f"Code[{path}]: {snippet}..."
+        return "\n".join(chunks)
     
     def unload_all(self) -> None:
         """Clear all loaded content to free memory."""

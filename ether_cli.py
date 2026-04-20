@@ -204,7 +204,7 @@ class EtherCLI:
         return True
     
     def chat(self, query: str):
-        """Send query to Ether and display response."""
+        """Send query to Ether and display response with change summary."""
         start_time = time.time()
         
         # Get response from brain using process_query
@@ -212,14 +212,36 @@ class EtherCLI:
         
         elapsed = time.time() - start_time
         
-        # Display response
+        # Display response header
         print(f"\n{'ETHER':<10} [{elapsed:.1f}s]")
         print("-" * 60)
         
         # Extract text from result with safe fallback
         response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
-
-        # Display response
+        
+        # If this is a build/debug response, show change summary first
+        if result.get("type") == "build" or result.get("type") == "debug":
+            changes = result.get("changes", [])
+            if changes:
+                print("\n📝 Changes Made:")
+                for change in changes[:5]:  # Show up to 5 changes
+                    file_path = change.get("file", "unknown.gd")
+                    action = change.get("action", "modify")
+                    
+                    # Analyze content for line changes (simple heuristic)
+                    content = change.get("content", "")
+                    if content:
+                        lines = content.split('\n')
+                        added = sum(1 for l in lines if l.strip() and not l.strip().startswith('#'))
+                        print(f"   • {file_path}: {action} ({added}+ lines)")
+                    else:
+                        print(f"   • {file_path}: {action}")
+                
+                if len(changes) > 5:
+                    print(f"   ... and {len(changes) - 5} more files")
+                print()
+        
+        # Display full response
         lines = str(response).split('\n')
         for i, line in enumerate(lines):
             if i > 0 and i % 20 == 0:

@@ -491,8 +491,12 @@ def _generate(task: str, context: str) -> Dict:
     """GENERATE role - ultra-light for 1.5B models"""
     ctx = _trim_context(context, task, task_type="build")[:150]  # Hard cap
     user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
+    
+    # Simplified prompt for speed
+    system_prompt = "Godot 4 GDScript. Output JSON:{\"changes\":[{\"file\":\"path.gd\",\"action\":\"create_or_modify\",\"content\":\"full file\"}],\"summary\":\"what changed\"}"
+    
     raw = _call("generate", [
-        {"role": "system", "content": _BUILD_SYSTEM},
+        {"role": "system", "content": system_prompt},
         {"role": "user",   "content": user_content},
     ])
     result = _safe_json(raw)
@@ -505,8 +509,12 @@ def _debug(task: str, context: str) -> Dict:
     """DEBUG role - ultra-light for 1.5B models"""
     ctx = _trim_context(context, task, task_type="default")[:150]  # Hard cap
     user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
+    
+    # Simplified prompt for speed
+    system_prompt = "Godot 4 GDScript. Output JSON:{\"root_cause\":\"issue\",\"changes\":[{\"file\":\"path.gd\",\"content\":\"fixed\"}],\"explanation\":\"why\"}"
+    
     raw = _call("debug", [
-        {"role": "system", "content": _DEBUG_SYSTEM},
+        {"role": "system", "content": system_prompt},
         {"role": "user",   "content": user_content},
     ])
     result = _safe_json(raw)
@@ -519,8 +527,12 @@ def _explain(task: str, context: str) -> str:
     """EXPLAIN role - ultra-light for 1.5B models"""
     ctx = _trim_context(context, task, task_type="analyze")[:200]  # Slightly more for analysis
     user_content = f"{task}\n{ctx}" if ctx else task
+    
+    # Simplified prompt for speed
+    system_prompt = "Godot 4 expert. Analyze and optimize. Be specific about file names and line changes. 3 bullet points max."
+    
     return _call("explain", [
-        {"role": "system", "content": _EXPLAIN_SYSTEM},
+        {"role": "system", "content": system_prompt},
         {"role": "user",   "content": user_content},
     ])
 
