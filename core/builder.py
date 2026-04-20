@@ -24,9 +24,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# ULTRA-LIGHTWEIGHT CONFIG FOR 2GB RAM
-# Single model for all tasks to avoid model switching overhead
+# OPTIMIZED CONFIG FOR 2GB RAM - BALANCED APPROACH
 PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
+FALLBACK_MODEL = "gemma:2b"
 
 MODELS = {
     "generate": PRIMARY_MODEL,
@@ -35,20 +35,23 @@ MODELS = {
     "chat":     PRIMARY_MODEL,
 }
 
-MAX_CONTEXT_CHARS = 200  # HARD CAP - reduced from 300 for faster inference
+# SMART CONTEXT LIMITS - Adaptive based on task type
+MAX_CONTEXT_CHARS = 400      # Base limit for most tasks
+MAX_CONTEXT_ANALYZE = 600    # More context for analysis (still safe)
+MAX_CONTEXT_BUILD = 300      # Less context for generation (faster)
 
 TIMEOUT = {
-    "generate": 60,   # Reduced from 90
-    "debug":    60,
-    "explain":  45,
+    "generate": 50,   # Balanced timeout
+    "debug":    50,
+    "explain":  40,
     "chat":     30,
 }
 
 MAX_TOKENS = {
-    "generate": 200,  # Reduced from 300
-    "debug":    200,
-    "explain":  100,
-    "chat":     80,
+    "generate": 256,  # Enough for useful code snippets
+    "debug":    256,
+    "explain":  128,
+    "chat":     96,
 }
 
 # Cache settings from v1.8
@@ -231,11 +234,10 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 def _call(role: str, messages: List[Dict]) -> str:
     """
     Call Ollama with the model assigned to this role.
-    Stateless — no shared model state. Ollama handles load/unload.
-    We never preload or cache models in memory.
+    Includes smart retry with fallback model on timeout.
     """
     model   = MODELS.get(role, MODELS["chat"])
-    tokens  = MAX_TOKENS.get(role, 192)
+    tokens  = MAX_TOKENS.get(role, 96)
     timeout = TIMEOUT.get(role, 30)
 
     # Keep only system + last user msg to minimize token pressure
@@ -265,18 +267,60 @@ def _call(role: str, messages: List[Dict]) -> str:
     try:
         r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
         if r.status_code != 200:
-            return f"Ollama error {r.status_code}: {r.text[:200]}"
+            error_msg = f"Ollama error {r.status_code}: {r.text[:200]}"
+            # Auto-retry with fallback model on error
+            if FALLBACK_MODEL and FALLBACK_MODEL != model:
+                return _call_with_fallback(role, messages, timeout, tokens)
+            return error_msg
         content = r.json().get("message", {}).get("content", "").strip()
         for tag in ["User:", "Assistant:", "Chatbot:"]:
             if tag in content:
                 content = content.split(tag)[0].strip()
         return content or "Empty response. Try again."
     except requests.exceptions.Timeout:
+        # Auto-retry with fallback model on timeout
+        if FALLBACK_MODEL and FALLBACK_MODEL != model:
+            return _call_with_fallback(role, messages, timeout, tokens)
         return f"Timeout ({timeout}s). Input too long or Ollama slow."
     except requests.exceptions.ConnectionError:
         return "Ollama not running. Start with: ollama serve"
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: int) -> str:
+    """
+    Retry with fallback model when primary fails.
+    """
+    fallback_model = FALLBACK_MODEL
+    payload_msgs = [m for m in messages if m["role"] in ("system", "user")]
+    
+    payload = {
+        "model": fallback_model,
+        "messages": payload_msgs,
+        "stream": False,
+        "options": {
+            "num_predict": tokens,
+            "temperature": 0.3,  # Slightly lower for stability
+            "top_p": 0.9,
+            "repeat_penalty": 1.1,
+            "stop": ["User:", "Assistant:", "###"],
+        },
+    }
+    
+    try:
+        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout * 1.2)  # Give fallback slightly more time
+        if r.status_code != 200:
+            return f"Fallback error {r.status_code}: {r.text[:200]}"
+        content = r.json().get("message", {}).get("content", "").strip()
+        for tag in ["User:", "Assistant:", "Chatbot:"]:
+            if tag in content:
+                content = content.split(tag)[0].strip()
+        return content or "Fallback empty response."
+    except requests.exceptions.Timeout:
+        return f"Timeout ({timeout}s). Both models timed out."
+    except Exception as e:
+        return f"Fallback error: {str(e)}"
 
 
 # ── JSON Parsing ───────────────────────────────────────────────────────────────
@@ -338,13 +382,22 @@ def _format_llm_result(result: Any) -> str:
 
 # ── Context Trimmer — Lightweight ─────────────────────────────────────────────
 
-def _trim_context(context: str, task: str) -> str:
+def _trim_context(context: str, task: str, task_type: str = "default") -> str:
     """
-    Hard cap: MAX_CONTEXT_CHARS.
+    Smart context trimmer - adaptive limits based on task type.
     Prioritizes lines with task keywords — no RAG, no embeddings.
     """
     if not context:
         return ""
+    
+    # Adaptive limits based on task type
+    if task_type == "analyze":
+        max_chars = MAX_CONTEXT_ANALYZE
+    elif task_type in ("build", "generate"):
+        max_chars = MAX_CONTEXT_BUILD
+    else:
+        max_chars = MAX_CONTEXT_CHARS
+    
     keywords = set(re.findall(r'\w+', task.lower()))
     lines = context.splitlines()
     scored = sorted(
@@ -353,7 +406,7 @@ def _trim_context(context: str, task: str) -> str:
     )
     result, total = [], 0
     for _, line in scored:
-        if total + len(line) + 1 > MAX_CONTEXT_CHARS:
+        if total + len(line) + 1 > max_chars:
             break
         result.append(line)
         total += len(line) + 1
@@ -435,8 +488,8 @@ _CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text 
 # ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 def _generate(task: str, context: str) -> Dict:
-    """GENERATE role — ultra-lightweight"""
-    ctx = _trim_context(context, task)
+    """GENERATE role - balanced for useful output"""
+    ctx = _trim_context(context, task, task_type="generate")
     user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
     raw = _call("generate", [
         {"role": "system", "content": _BUILD_SYSTEM},
@@ -449,8 +502,8 @@ def _generate(task: str, context: str) -> Dict:
 
 
 def _debug(task: str, context: str) -> Dict:
-    """DEBUG role — ultra-lightweight"""
-    ctx = _trim_context(context, task)
+    """DEBUG role - balanced for useful fixes"""
+    ctx = _trim_context(context, task, task_type="default")
     user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
     raw = _call("debug", [
         {"role": "system", "content": _DEBUG_SYSTEM},
@@ -463,8 +516,8 @@ def _debug(task: str, context: str) -> Dict:
 
 
 def _explain(task: str, context: str) -> str:
-    """EXPLAIN role — ultra-lightweight"""
-    ctx = _trim_context(context, task)
+    """EXPLAIN role - balanced for clear answers"""
+    ctx = _trim_context(context, task, task_type="analyze")
     user_content = f"{task}\n{ctx}" if ctx else task
     return _call("explain", [
         {"role": "system", "content": _EXPLAIN_SYSTEM},
@@ -1033,8 +1086,16 @@ class EtherBrain:
             context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
-                # ULTRA-LIGHTWEIGHT: Load minimal context for 2GB RAM systems (300 chars max)
-                context = self.project_loader.build_lightweight_context(query, max_chars=300)
+                # SMART CONTEXT LOADING - Adaptive based on intent type
+                if complex_intent == 'analyze':
+                    # Analysis benefits from more context
+                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_ANALYZE)
+                elif complex_intent == 'build':
+                    # Build needs focused context
+                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_BUILD)
+                else:
+                    # Default balanced context
+                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_CHARS)
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
