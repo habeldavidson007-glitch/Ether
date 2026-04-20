@@ -5,27 +5,9 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Compiled and build artifacts
-*.o
-*.obj
-*.out
-*.so
-*.dll
-*.a
-*.class
-
-# Dependencies
-.venv/
-venv/
-node_modules/
-.mypy_cache/
-.pytest_cache/
-
 # Logs and temp files
 *.log
 *.tmp
-*.swp
-*.swo
 
 # Environment
 .env
@@ -36,8 +18,13 @@ node_modules/
 .vscode/
 .idea/
 
-# Distribution / packaging
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Build artifacts
 dist/
 build/
-*.egg-info/
+target/
 ```

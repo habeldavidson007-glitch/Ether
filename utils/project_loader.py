@@ -494,16 +494,12 @@ def build_structured_context(file_path: str, intent: str) -> str:
     content = ""
     
     try:
-        loader = LazyProjectLoader()
-        if file_path.endswith('.zip'):
-            pass
-        else:
-            # Try to read file directly
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                    content = f.read()[:2000]  # Limit read size
-            except:
-                content = ""
+        # Try to read file directly
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()[:2000]  # Limit read size
+        except:
+            content = ""
         
         for issue_name, patterns in _GODOT_ISSUE_PATTERNS.items():
             for pattern in patterns:

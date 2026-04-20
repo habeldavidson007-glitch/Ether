@@ -279,9 +279,9 @@ def _call_with_retry(role: str, messages: List[Dict], structured_context: str = 
             content = r.json().get("message", {}).get("content", "").strip()
             return _extract_code_from_tags(content)
     except requests.exceptions.Timeout:
-        pass
+        pass  # Will fall through to fallback
     except Exception:
-        pass
+        pass  # Will fall through to fallback
     
     # FALLBACK MODEL ATTEMPT (20s) - Simplified prompt
     fallback_payload = {
@@ -306,11 +306,11 @@ def _call_with_retry(role: str, messages: List[Dict], structured_context: str = 
             content = r.json().get("message", {}).get("content", "").strip()
             return _extract_code_from_tags(content)
     except requests.exceptions.Timeout:
-        return f"Warning: Both models timed out. Primary: {TIMEOUT_PRIMARY}s, Fallback: {TIMEOUT_FALLBACK}s."
-    except Exception as e:
-        return f"Warning: Fallback failed: {str(e)}"
+        pass  # Will return final warning below
+    except Exception:
+        pass  # Will return final warning below
     
-    return "Warning: All execution attempts failed."
+    return f"Warning: Both models timed out. Primary: {TIMEOUT_PRIMARY}s, Fallback: {TIMEOUT_FALLBACK}s. Ensure Ollama is running with 'ollama serve' and models are pulled."
 
 
 def _call(role: str, messages: List[Dict]) -> str:
@@ -985,13 +985,15 @@ class EtherBrain:
     
     def process_query(self, query: str, yield_steps=None) -> Tuple[Dict, List[str]]:
         """
-        Process a user query with intent-aware routing.
+        V2.1 PROCESS QUERY - Single call only. No multi-stage chains.
         
-        Fast Path: Greetings, status, quick help → instant response (<2s)
-        Slow Path: Analysis, coding, debugging → full LLM pipeline
+        Fast Path: Greetings, status, quick help → instant response (<1s)
+        Complex Path: build_structured_context() → _call_with_retry()
         
         Returns: (result_dict, log_list)
         """
+        from utils.project_loader import build_structured_context
+        
         log = []
         
         def step(name: str):
@@ -1000,127 +1002,61 @@ class EtherBrain:
                 yield_steps(name)
         
         # STEP 1: Detect intent using fast regex patterns
-        fast_intent = detect_intent_fast(query)
+        intent = detect_intent_fast(query)
         
-        # STEP 2: Check cache for repeated queries (only for non-greeting intents)
-        if fast_intent != 'greeting':
-            cached = _response_cache.get(query, fast_intent, self.project_fingerprint)
-            if cached is not None:
-                step("⚡ Cache hit!")
-                return {"type": "chat", "text": cached, "cached": True}, log
-        
-        # STEP 3: Route based on intent
-        if fast_intent == 'greeting':
-            # FAST PATH: Instant greeting response
-            step("⚡ Fast path (greeting)")
-            response = get_fast_response(fast_intent, query, self.project_stats)
+        # FAST PATH for simple intents (no LLM)
+        if intent in ('greeting', 'status', 'quick_help'):
+            step("⚡ Fast path")
+            response = get_fast_response(intent, query, self.project_stats)
             return {"type": "chat", "text": response, "fast_path": True}, log
         
-        elif fast_intent == 'status':
-            # FAST PATH: Status from cached stats (no LLM needed)
-            step("⚡ Fast path (status)")
-            response = get_fast_response(fast_intent, query, self.project_stats)
-            return {"type": "chat", "text": response, "fast_path": True}, log
+        # COMPLEX PATH: Build structured context and execute single LLM call
+        step("Building context...")
         
-        elif fast_intent == 'quick_help':
-            # FAST PATH: Pre-defined help response
-            step("⚡ Fast path (help)")
-            response = get_fast_response(fast_intent, query, self.project_stats)
-            return {"type": "chat", "text": response, "fast_path": True}, log
+        # Get file path from project loader if available
+        file_path = ""
+        if self.project_loader:
+            relevant_files = self.project_loader.find_relevant_files(query, max_files=1)
+            if relevant_files:
+                file_path = relevant_files[0]
+                if self.project_loader._mode == "folder" and self.project_loader._base_path:
+                    file_path = str(self.project_loader._base_path / file_path)
         
-        elif fast_intent == 'explain':
-            # FAST PATH: Quick definition/explanation without LLM
-            step("⚡ Fast path (explain)")
-            response = get_fast_response(fast_intent, query, self.project_stats)
-            return {"type": "chat", "text": response, "fast_path": True}, log
+        structured_ctx = build_structured_context(file_path, intent)
+        
+        # Route to appropriate single-call handler based on intent
+        if intent in ("build", "generate") or "create" in query.lower() or "write" in query.lower():
+            step("Generating...")
+            try:
+                result = _generate(query, structured_ctx)
+                return {"type": "build", **result}, log
+            except Exception as e:
+                return {"type": "chat", "text": f"Build error: {e}"}, log
+        
+        elif intent == "debug" or "error" in query.lower() or "fix" in query.lower():
+            step("Debugging...")
+            try:
+                result = _debug(query, structured_ctx)
+                return {"type": "debug", **result}, log
+            except Exception as e:
+                return {"type": "chat", "text": f"Debug error: {e}"}, log
+        
+        elif intent in ("explain", "analyze") or "analyze" in query.lower():
+            step("Explaining...")
+            try:
+                text = _explain(query, structured_ctx)
+                return {"type": "chat", "text": text}, log
+            except Exception as e:
+                return {"type": "chat", "text": f"Explain error: {e}"}, log
         
         else:
-            # SLOW PATH: Complex intent requires LLM
-            # Determine complex intent type (analyze, debug, build, chat)
-            complex_intent = self._classify_complex_intent(query)
-            
-            # Get context lazily (only loads relevant files)
-            context = ""
-            if self.project_loader:
-                step("📂 Loading relevant files...")
-                # SMART CONTEXT LOADING - Adaptive based on intent type
-                if complex_intent == 'analyze':
-                    # Analysis benefits from more context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_ANALYZE)
-                elif complex_intent == 'build':
-                    # Build needs focused context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_BUILD)
-                else:
-                    # Default balanced context
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_CHARS)
-                
-                self.project_stats = self.project_loader.get_stats()
-                self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
-            
-            # Add memory context if available
-            memory_context = self._get_memory_context(query)
-            if memory_context:
-                context = memory_context + "\n\n" + context
-            
-            # Run appropriate pipeline
-            if complex_intent == 'analyze':
-                step("🔍 Analyzing project...")
-                try:
-                    # HYBRID STATIC ANALYSIS PIPELINE (v1.8)
-                    # Step 1: Run static analyzer first (instant, no LLM)
-                    static_report = ""
-                    if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
-                        from core.static_analyzer import StaticAnalyzer
-                        analyzer = StaticAnalyzer()
-                        static_report = analyzer.analyze(str(self.project_loader._base_path))
-                        step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
-                    
-                    # Step 2: Send ONLY the findings to LLM for friendly summary
-                    if static_report:
-                        llm_prompt = f"Here are the technical findings: {static_report}\n\nPlease summarize these for the user in 2-3 friendly sentences."
-                        text = analyze(llm_prompt, "", self.history, chat_mode=self.chat_mode)
-                    else:
-                        # Fallback if static analysis couldn't run
-                        text = analyze(query, context, self.history, chat_mode=self.chat_mode)
-                    
-                    # Cache the result
-                    _response_cache.set(query, complex_intent, self.project_fingerprint, text)
-                    return {"type": "chat", "text": text}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
-            
-            elif complex_intent == 'debug':
-                step("🔧 Debugging...")
-                try:
-                    result = debug(query, context)
-                    return {"type": "debug", **result}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
-            
-            elif complex_intent == 'build':
-                step("🏗 Building...")
-                try:
-                    thought = think(query, context)
-                    step("Thinking...")
-                    blueprint = plan(query, thought, context)
-                    step("Planning...")
-                    result = build(query, thought, blueprint, context)
-                    step("Building...")
-                    return {"type": "build", "thought": thought, **result}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
-            
-            else:
-                # Default to chat - don't pass heavy context for casual chat
-                step("💬 Chatting...")
-                try:
-                    text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
-                               "", chat_mode=self.chat_mode)
-                    # Cache chat responses too
-                    _response_cache.set(query, complex_intent, self.project_fingerprint, text)
-                    return {"type": "chat", "text": text}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
+            # Default chat
+            step("Responding...")
+            try:
+                text = _chat(query)
+                return {"type": "chat", "text": text}, log
+            except Exception as e:
+                return {"type": "chat", "text": f"Error: {e}"}, log
     
     def _classify_complex_intent(self, query: str) -> str:
         """
