@@ -24,28 +24,31 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# One model per role. Only ONE loaded per request — never simultaneously.
+# ULTRA-LIGHTWEIGHT CONFIG FOR 2GB RAM
+# Single model for all tasks to avoid model switching overhead
+PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
+
 MODELS = {
-    "generate": "qwen2.5-coder:1.5b-instruct-q4_k_m",
-    "debug":    "gemma:2b",
-    "explain":  "qwen2.5-coder:1.5b-instruct-q4_k_m",
-    "chat":     "qwen2.5-coder:1.5b-instruct-q4_k_m",
+    "generate": PRIMARY_MODEL,
+    "debug":    PRIMARY_MODEL,
+    "explain":  PRIMARY_MODEL,
+    "chat":     PRIMARY_MODEL,
 }
 
-MAX_CONTEXT_CHARS = 300  # Hard cap for 1.5B models. Do not raise.
+MAX_CONTEXT_CHARS = 200  # HARD CAP - reduced from 300 for faster inference
 
 TIMEOUT = {
-    "generate": 90,   # Increased for slower CPUs
-    "debug":    90,
-    "explain":  60,
-    "chat":     45,
+    "generate": 60,   # Reduced from 90
+    "debug":    60,
+    "explain":  45,
+    "chat":     30,
 }
 
 MAX_TOKENS = {
-    "generate": 300,  # Reduced for 1.5B models
-    "debug":    300,
-    "explain":  150,
-    "chat":     128,
+    "generate": 200,  # Reduced from 300
+    "debug":    200,
+    "explain":  100,
+    "chat":     80,
 }
 
 # Cache settings from v1.8
@@ -414,73 +417,55 @@ def _validate_gdscript(code: str) -> List[str]:
 # ── System Prompts ─────────────────────────────────────────────────────────────
 
 _GODOT_BASE = (
-    "You are Ether — a Godot 4 GDScript assistant. "
-    "Godot 4 syntax only (@export, @onready). snake_case. Type hints. "
-    "No Unity/C#/Godot 3 patterns."
+    "Godot 4 GDScript assistant. @export, @onready, snake_case. COMPLETE files only."
 )
 
 _BUILD_SYSTEM = _GODOT_BASE + """
-Output ONLY valid JSON — no preamble, no markdown outside the JSON block:
-{
-  "changes": [{"file": "path.gd", "action": "create_or_modify", "content": "full file content"}],
-  "summary": "what was built"
-}
-Complete files only. No placeholders."""
+Output ONLY valid JSON:
+{"changes":[{"file":"path.gd","action":"create_or_modify","content":"full file"}],"summary":"what"}"""
 
 _DEBUG_SYSTEM = _GODOT_BASE + """
-Diagnose and fix the provided code.
-Output ONLY valid JSON:
-{
-  "root_cause": "specific issue found",
-  "changes": [{"file": "path.gd", "action": "create_or_modify", "content": "fixed file"}],
-  "explanation": "why this fix works"
-}"""
+Diagnose and fix. Output ONLY valid JSON:
+{"root_cause":"issue","changes":[{"file":"path.gd","action":"create_or_modify","content":"fixed"}],"explanation":"why"}"""
 
-_EXPLAIN_SYSTEM = _GODOT_BASE + " Answer clearly. Reference Godot 4 API. Plain text only."
-_CHAT_SYSTEM    = _GODOT_BASE + " Conversational mode. Direct and concise. Plain text only."
+_EXPLAIN_SYSTEM = _GODOT_BASE + " Answer clearly in 2-3 sentences max. Godot 4 API only."
+_CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text only."
 
 
 # ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 def _generate(task: str, context: str) -> Dict:
-    """GENERATE role → qwen2.5-coder:1.5b-instruct-q4_k_m"""
+    """GENERATE role — ultra-lightweight"""
     ctx = _trim_context(context, task)
-    user_content = f"Task: {task}\n\nContext:\n{ctx}" if ctx else f"Task: {task}"
+    user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
     raw = _call("generate", [
         {"role": "system", "content": _BUILD_SYSTEM},
         {"role": "user",   "content": user_content},
     ])
     result = _safe_json(raw)
     if not result:
-        result = {
-            "changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}],
-            "summary": "Generated (raw fallback — JSON parse failed)"
-        }
+        result = {"changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}], "summary": "Generated"}
     return result
 
 
 def _debug(task: str, context: str) -> Dict:
-    """DEBUG role → gemma:2b. Only called when needed."""
+    """DEBUG role — ultra-lightweight"""
     ctx = _trim_context(context, task)
-    user_content = f"Error/task:\n{task}\n\nCode:\n{ctx}" if ctx else f"Error/task:\n{task}"
+    user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
     raw = _call("debug", [
         {"role": "system", "content": _DEBUG_SYSTEM},
         {"role": "user",   "content": user_content},
     ])
     result = _safe_json(raw)
     if not result:
-        result = {
-            "root_cause": "Parse failed — see raw output",
-            "changes": [],
-            "explanation": raw.strip() or "No debug output."
-        }
+        result = {"root_cause": "See output", "changes": [], "explanation": raw.strip() or "No output"}
     return result
 
 
 def _explain(task: str, context: str) -> str:
-    """EXPLAIN role → qwen2.5-coder:1.5b-instruct-q4_k_m. Plain text."""
+    """EXPLAIN role — ultra-lightweight"""
     ctx = _trim_context(context, task)
-    user_content = f"{task}\n\nContext:\n{ctx}" if ctx else task
+    user_content = f"{task}\n{ctx}" if ctx else task
     return _call("explain", [
         {"role": "system", "content": _EXPLAIN_SYSTEM},
         {"role": "user",   "content": user_content},
@@ -488,7 +473,7 @@ def _explain(task: str, context: str) -> str:
 
 
 def _chat(task: str) -> str:
-    """CHAT role → qwen2.5-coder:1.5b-instruct-q4_k_m. No context — fastest path."""
+    """CHAT role — fastest path, no context"""
     return _call("chat", [
         {"role": "system", "content": _CHAT_SYSTEM},
         {"role": "user",   "content": task},
