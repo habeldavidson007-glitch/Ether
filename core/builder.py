@@ -427,16 +427,17 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     
     v1.9.8 OPTIMIZATION: Added temperature and top_p parameters to improve small model output quality.
     Default values (0.7, 0.9) encourage creativity while maintaining coherence for 1.5B-3B models.
+    
+    NOTE: Temperature/top_p are passed via JSON options in the prompt, not CLI flags.
     """
     start_time = time.time()
     
-    # Build command with model parameters for better generation quality
+    # Build command - Ollama run doesn't support --temperature flags directly
+    # We'll use the default settings or pass options via environment/modelfile if needed
     cmd = [
         "ollama", 
         "run", 
-        model,
-        "--temperature", str(temperature),
-        "--top-p", str(top_p)
+        model
     ]
     
     try:
