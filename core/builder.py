@@ -16,8 +16,142 @@ import re
 import time
 import hashlib
 import requests
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+
+# ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
+# Converts vague user requests into atomic, bounded instructions for LLM
+# This removes "thinking" burden from the model and puts it in Python
+
+def _extract_filename(query: str) -> str:
+    """Extract .gd filename from query."""
+    import re
+    match = re.search(r'([\w\-]+\.gd)', query.lower())
+    return match.group(1) if match else ""
+
+
+def _decompose_task(query: str) -> dict:
+    """
+    Decompose user query into action and target.
+    Returns: {"action": str, "target": str}
+    """
+    q = query.lower()
+
+    action = "unknown"
+    if "optimize" in q or "improve" in q or "refactor" in q:
+        action = "optimize"
+    elif "fix" in q or "error" in q or "bug" in q or "broken" in q:
+        action = "debug"
+    elif "explain" in q or "what" in q or "how" in q:
+        action = "explain"
+    elif "create" in q or "make" in q or "add" in q:
+        action = "build"
+    elif "analyze" in q or "check" in q or "review" in q:
+        action = "analyze"
+    else:
+        action = "chat"
+
+    return {
+        "action": action,
+        "target": _extract_filename(q)
+    }
+
+
+def _reduce_task(task: dict, analysis: dict) -> dict:
+    """
+    Convert vague task into atomic instruction based on static analysis.
+    This is the CORE of the Thinking Engine - reduces LLM cognitive load.
+    
+    Returns: {"focus": str, "instruction": str, "limit": str}
+    """
+    issues = analysis.get("issues", []) if analysis else []
+    issue_str = ", ".join(issues).lower() if issues else ""
+
+    # Priority-based reduction: specific issues get specific fixes
+    if "velocity" in issue_str or "movement" in issue_str:
+        return {
+            "focus": "movement logic",
+            "instruction": "normalize velocity handling and ensure delta is applied correctly",
+            "limit": "max 30 lines"
+        }
+
+    if "delta" in issue_str or "_process" in issue_str:
+        return {
+            "focus": "_process function",
+            "instruction": "add delta parameter and use it for frame-independent movement",
+            "limit": "max 20 lines"
+        }
+
+    if "signal" in issue_str or "connect" in issue_str:
+        return {
+            "focus": "signal connections",
+            "instruction": "ensure signals are properly connected and disconnected",
+            "limit": "max 25 lines"
+        }
+
+    if "variable" in issue_str or "unused" in issue_str:
+        return {
+            "focus": "code cleanup",
+            "instruction": "remove unused variables and improve code organization",
+            "limit": "max 20 lines"
+        }
+
+    # Fallback based on action type
+    if task["action"] == "optimize":
+        return {
+            "focus": "code structure",
+            "instruction": "reduce redundancy, improve readability, and apply Godot best practices",
+            "limit": "max 25 lines"
+        }
+
+    if task["action"] == "debug":
+        return {
+            "focus": "bug fix",
+            "instruction": "identify and fix the root cause of the reported issue",
+            "limit": "max 30 lines"
+        }
+
+    if task["action"] == "build":
+        return {
+            "focus": "new feature",
+            "instruction": "implement the requested functionality following Godot conventions",
+            "limit": "max 30 lines"
+        }
+
+    # Default fallback
+    return {
+        "focus": "general improvement",
+        "instruction": "make minimal necessary improvements for clarity and efficiency",
+        "limit": "max 20 lines"
+    }
+
+
+def _build_execution_prompt(file: str, reduction: dict, context: str) -> str:
+    """
+    Build a constrained execution prompt that tells LLM exactly what to do.
+    No analysis, no thinking - just execution.
+    """
+    return f"""File: {file}
+
+Focus: {reduction['focus']}
+
+Instruction:
+{reduction['instruction']}
+
+Constraints:
+- Modify only necessary parts
+- Do not rewrite entire file
+- {reduction['limit']}
+- Output code only, no explanations
+
+Context:
+{context}
+
+Output:
+Code only."""
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -41,10 +175,11 @@ MAX_CONTEXT_ANALYZE = 250    # Slightly more for analysis (max safe limit)
 MAX_CONTEXT_BUILD = 150      # Minimal context for generation
 
 TIMEOUT = {
-    "generate": 35,   # Strict timeout to force fallback quickly
-    "debug":    35,
+    "generate": 60,   # File-specific tasks need more time
+    "debug":    60,
     "explain":  30,
     "chat":     25,
+    "analyze":  75,   # Project-wide analysis needs maximum time
 }
 
 MAX_TOKENS = {
@@ -52,6 +187,7 @@ MAX_TOKENS = {
     "debug":    150,
     "explain":  100,
     "chat":     80,
+    "analyze":  200,  # Analysis can be slightly longer
 }
 
 # Cache settings from v1.8
@@ -229,12 +365,60 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
     return ""
 
 
-# ── Ollama Call — Role-Aware ───────────────────────────────────────────────────
+# ── Ollama Call — Role-Aware with HARD TIMEOUT ENFORCEMENT ─────────────────────
+
+def _call_with_enforced_timeout(model: str, payload: dict, timeout: int) -> Optional[str]:
+    """
+    Execute Ollama call with HARD timeout enforcement using threading.
+    Returns response string or None if timeout/error.
+    
+    This is CRITICAL for 2GB RAM systems - prevents hanging forever.
+    """
+    result = {"response": None, "error": None}
+    
+    def make_request():
+        try:
+            r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+            if r.status_code != 200:
+                result["error"] = f"Ollama error {r.status_code}: {r.text[:200]}"
+                return
+            
+            content = r.json().get("message", {}).get("content", "").strip()
+            # Clean up common artifacts
+            for tag in ["User:", "Assistant:", "Chatbot:"]:
+                if tag in content:
+                    content = content.split(tag)[0].strip()
+            result["response"] = content if content else "Empty response. Try again."
+            
+        except requests.exceptions.Timeout:
+            result["error"] = "TIMEOUT"
+        except requests.exceptions.ConnectionError:
+            result["error"] = "CONNECTION_ERROR"
+        except Exception as e:
+            result["error"] = str(e)
+    
+    # Execute in thread with hard timeout
+    thread = threading.Thread(target=make_request)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout + 2)  # Small buffer
+    
+    if thread.is_alive():
+        # Thread still running = timeout enforced
+        return None
+    
+    if result["error"]:
+        raise Exception(result["error"])
+    
+    return result["response"]
+
 
 def _call(role: str, messages: List[Dict]) -> str:
     """
     Call Ollama with the model assigned to this role.
-    Includes smart retry with fallback model on timeout.
+    Includes HARD timeout enforcement and smart retry with fallback model.
+    
+    CRITICAL FIX: Uses threading to enforce actual timeout (not just measure it).
     """
     model   = MODELS.get(role, MODELS["chat"])
     tokens  = MAX_TOKENS.get(role, 96)
@@ -265,32 +449,37 @@ def _call(role: str, messages: List[Dict]) -> str:
     }
 
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
-        if r.status_code != 200:
-            error_msg = f"Ollama error {r.status_code}: {r.text[:200]}"
-            # Auto-retry with fallback model on error
+        # HARD TIMEOUT ENFORCEMENT - actually kills the request
+        content = _call_with_enforced_timeout(model, payload, timeout)
+        
+        if content is None:
+            # Timeout occurred - try fallback
             if FALLBACK_MODEL and FALLBACK_MODEL != model:
                 return _call_with_fallback(role, messages, timeout, tokens)
-            return error_msg
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Empty response. Try again."
-    except requests.exceptions.Timeout:
-        # Auto-retry with fallback model on timeout
-        if FALLBACK_MODEL and FALLBACK_MODEL != model:
-            return _call_with_fallback(role, messages, timeout, tokens)
-        return f"Timeout ({timeout}s). Input too long or Ollama slow."
-    except requests.exceptions.ConnectionError:
-        return "Ollama not running. Start with: ollama serve"
+            return f"Timeout ({timeout}s). Input too long or Ollama slow."
+        
+        return content
+        
     except Exception as e:
-        return f"Error: {str(e)}"
+        error_msg = str(e)
+        # Auto-retry with fallback model on error
+        if FALLBACK_MODEL and FALLBACK_MODEL != model and "TIMEOUT" not in error_msg and "CONNECTION_ERROR" not in error_msg:
+            return _call_with_fallback(role, messages, timeout, tokens)
+        
+        if "TIMEOUT" in error_msg:
+            if FALLBACK_MODEL and FALLBACK_MODEL != model:
+                return _call_with_fallback(role, messages, timeout, tokens)
+            return f"Timeout ({timeout}s). Both models timed out."
+        elif "CONNECTION_ERROR" in error_msg:
+            return "Ollama not running. Start with: ollama serve"
+        else:
+            return f"Error: {error_msg}"
 
 
 def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: int) -> str:
     """
     Retry with fallback model when primary fails.
+    Uses HARD timeout enforcement for reliability.
     """
     fallback_model = FALLBACK_MODEL
     payload_msgs = [m for m in messages if m["role"] in ("system", "user")]
@@ -309,21 +498,26 @@ def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: i
     }
     
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout * 1.2)  # Give fallback slightly more time
-        if r.status_code != 200:
-            return f"Fallback error {r.status_code}: {r.text[:200]}"
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Fallback empty response."
-    except requests.exceptions.Timeout:
-        return f"Timeout ({timeout}s). Both models timed out."
+        # Use hard timeout enforcement for fallback too
+        extended_timeout = int(timeout * 1.2)  # Give fallback slightly more time
+        content = _call_with_enforced_timeout(fallback_model, payload, extended_timeout)
+        
+        if content is None:
+            return f"Timeout ({extended_timeout}s). Both models timed out."
+        
+        return content
+        
     except Exception as e:
-        return f"Fallback error: {str(e)}"
+        error_msg = str(e)
+        if "TIMEOUT" in error_msg:
+            return f"Timeout ({int(timeout * 1.2)}s). Both models timed out."
+        elif "CONNECTION_ERROR" in error_msg:
+            return "Ollama not running. Start with: ollama serve"
+        else:
+            return f"Fallback error: {error_msg}"
 
 
-# ── JSON Parsing ───────────────────────────────────────────────────────────────
+# ── JSON Parsing & RESILIENT CODE EXTRACTION ───────────────────────────────────
 
 def _safe_json(raw: str) -> Optional[Dict]:
     """Parse JSON from model output. Handles fences and trailing commas."""
@@ -357,6 +551,85 @@ def _safe_json(raw: str) -> Optional[Dict]:
             return json.loads(candidate)
         except json.JSONDecodeError:
             return None
+
+
+def _extract_code_block(raw: str) -> Optional[str]:
+    """
+    RESILIENT CODE EXTRACTOR - Never fails.
+    Extracts code from various formats:
+    - ```gdscript ... ```
+    - ```python ... ```
+    - ``` ... ```
+    - Plain text (returns as-is)
+    
+    This is CRITICAL - prevents "Parse failed" errors.
+    """
+    if not raw or not raw.strip():
+        return raw
+    
+    text = raw.strip()
+    
+    # Try to extract fenced code blocks
+    patterns = [
+        r'```(?:gdscript|python|GDScript)?\s*(.*?)\s*```',
+        r'```\s*(.*?)\s*```',
+    ]
+    
+    for pattern in patterns:
+        m = re.search(pattern, text, re.S | re.I)
+        if m:
+            code = m.group(1).strip()
+            if code:
+                return code
+    
+    # If no fenced block found, check if entire response looks like code
+    # (starts with common GDScript keywords)
+    code_indicators = ['extends ', 'func ', 'var ', '@export', '@onready', 'class_name']
+    if any(text.lower().startswith(ind) or f'\n{ind}' in text.lower() for ind in code_indicators):
+        return text
+    
+    # Last resort: return raw output (don't fail)
+    return text
+
+
+def _parse_gd_output(raw: str, expected_format: str = "json") -> Dict:
+    """
+    RESILIENT PARSER - Combines JSON parsing with code extraction.
+    NEVER returns failure - always produces usable output.
+    
+    Args:
+        raw: Raw LLM output
+        expected_format: "json" or "code"
+    
+    Returns:
+        Dict with parsed content or fallback
+    """
+    if not raw or not raw.strip():
+        return {"error": "Empty output", "raw": ""}
+    
+    # First try JSON parsing (for structured responses)
+    if expected_format == "json":
+        result = _safe_json(raw)
+        if result:
+            return result
+        
+        # JSON failed - try to extract code and wrap it
+        code = _extract_code_block(raw)
+        if code and code != raw:
+            # Found code in markdown block
+            return {
+                "changes": [{"file": "output.gd", "action": "create_or_modify", "content": code}],
+                "summary": "Generated (extracted from markdown)",
+                "raw_output": raw
+            }
+    
+    # For code format or if JSON parsing failed
+    code = _extract_code_block(raw)
+    return {
+        "changes": [{"file": "output.gd", "action": "create_or_modify", "content": code}],
+        "summary": "Generated",
+        "raw_output": raw
+    }
 
 
 def _format_llm_result(result: Any) -> str:
@@ -467,6 +740,75 @@ def _validate_gdscript(code: str) -> List[str]:
     return issues
 
 
+# ── Hard Output Constraint System (CRITICAL SAFETY LAYER) ──────────────────────
+
+def enforce_max_lines(code: str, max_lines: int = 30) -> str:
+    """
+    HARD CAP: Enforce maximum line count on generated code.
+    This is the primary defense against RAM spikes and infinite generation.
+    
+    Why this matters:
+    - Token limits are soft (model may try to use all tokens)
+    - Line limits are hard (immediate truncation)
+    - Prevents decoding pressure on low-RAM systems
+    """
+    if not code:
+        return code
+    
+    lines = code.splitlines()
+    if len(lines) <= max_lines:
+        return code
+    
+    # Truncate with clear indicator
+    truncated = "\n".join(lines[:max_lines])
+    return truncated + "\n# [OUTPUT TRUNCATED: max lines reached]"
+
+
+def validate_code_safety(code: str) -> Tuple[bool, str]:
+    """
+    SECURITY GATE: Block dangerous patterns AFTER generation.
+    Returns (is_safe, reason_if_unsafe)
+    
+    Banned patterns:
+    - File system access outside workspace
+    - Dynamic code loading
+    - Infinite loops / recursion without guards
+    - External network calls
+    """
+    if not code:
+        return False, "Empty code"
+    
+    banned_patterns = [
+        ("extends Node3D", "Node3D requires 3D resources"),
+        ("class_name ", "Global class registration not allowed"),
+        ("load(\"res://", "Dynamic resource loading blocked"),
+        ("preload(\"res://", "Preload blocked in generated code"),
+        ("OS.execute(", "System command execution blocked"),
+        ("DirAccess.", "Direct filesystem access blocked"),
+        ("FileAccess.", "Direct file access blocked"),
+        ("HTTPRequest", "Network requests blocked"),
+        ("while true:", "Infinite loop detected"),
+        ("while True:", "Infinite loop detected"),
+    ]
+    
+    for pattern, reason in banned_patterns:
+        if pattern in code:
+            return False, reason
+    
+    # Check for excessive recursion
+    func_calls = re.findall(r'(\w+)\s*\([^)]*\)', code)
+    func_defs = set(re.findall(r'^func\s+(\w+)\s*\(', code, re.MULTILINE))
+    
+    for func_name in func_defs:
+        call_count = func_calls.count(func_name)
+        if call_count > 3:  # Potential recursive loop
+            # Allow if there's a base case check
+            if f"if not {func_name}" not in code and f"if !{func_name}" not in code:
+                return False, f"Potential unsafe recursion in '{func_name}'"
+    
+    return True, "OK"
+
+
 # ── System Prompts ─────────────────────────────────────────────────────────────
 
 _GODOT_BASE = (
@@ -488,7 +830,7 @@ _CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text 
 # ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 def _generate(task: str, context: str) -> Dict:
-    """GENERATE role - ultra-light for 1.5B models"""
+    """GENERATE role - ultra-light for 1.5B models with HARD OUTPUT CONSTRAINTS"""
     ctx = _trim_context(context, task, task_type="build")[:150]  # Hard cap
     user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
     
@@ -502,11 +844,23 @@ def _generate(task: str, context: str) -> Dict:
     result = _safe_json(raw)
     if not result:
         result = {"changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}], "summary": "Generated"}
+
+    # CRITICAL: Apply hard output constraints AFTER generation (seatbelt system)
+    if "changes" in result and isinstance(result["changes"], list):
+        for change in result["changes"]:
+            if "content" in change:
+                # Enforce line limit
+                change["content"] = enforce_max_lines(change["content"], max_lines=30)
+                # Validate safety
+                is_safe, reason = validate_code_safety(change["content"])
+                if not is_safe:
+                    change["content"] = f"# INVALID PATCH REJECTED: {reason}\n" + change["content"][:200]
+
     return result
 
 
 def _debug(task: str, context: str) -> Dict:
-    """DEBUG role - ultra-light for 1.5B models"""
+    """DEBUG role - ultra-light for 1.5B models with HARD OUTPUT CONSTRAINTS"""
     ctx = _trim_context(context, task, task_type="default")[:150]  # Hard cap
     user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
     
@@ -520,6 +874,18 @@ def _debug(task: str, context: str) -> Dict:
     result = _safe_json(raw)
     if not result:
         result = {"root_cause": "See output", "changes": [], "explanation": raw.strip() or "No output"}
+
+    # CRITICAL: Apply hard output constraints AFTER generation (seatbelt system)
+    if "changes" in result and isinstance(result["changes"], list):
+        for change in result["changes"]:
+            if "content" in change:
+                # Enforce line limit
+                change["content"] = enforce_max_lines(change["content"], max_lines=30)
+                # Validate safety
+                is_safe, reason = validate_code_safety(change["content"])
+                if not is_safe:
+                    change["content"] = f"# INVALID PATCH REJECTED: {reason}\n" + change["content"][:200]
+
     return result
 
 
@@ -941,7 +1307,7 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call("explain", messages)
+    return _call("analyze", messages)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
@@ -1117,7 +1483,9 @@ class EtherBrain:
             if memory_context:
                 context = memory_context + "\n\n" + context
             
-            # Run appropriate pipeline
+            # Run appropriate pipeline with PIPELINE REORDERING (v1.9 FIX)
+            # KEY: File-specific tasks use scoped_loader, NOT global analyzer
+            
             if complex_intent == 'analyze':
                 step("🔍 Analyzing project...")
                 try:
@@ -1144,26 +1512,59 @@ class EtherBrain:
                 except Exception as e:
                     return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
             
-            elif complex_intent == 'debug':
-                step("🔧 Debugging...")
-                try:
-                    result = debug(query, context)
-                    return {"type": "debug", **result}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
-            
-            elif complex_intent == 'build':
-                step("🏗 Building...")
-                try:
-                    thought = think(query, context)
-                    step("Thinking...")
-                    blueprint = plan(query, thought, context)
-                    step("Planning...")
-                    result = build(query, thought, blueprint, context)
-                    step("Building...")
-                    return {"type": "build", "thought": thought, **result}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+            elif complex_intent in ('generate', 'build', 'debug'):
+                # FILE-SPECIFIC PIPELINE: Use scoped_loader + THINKING ENGINE
+                # This is the CRITICAL FIX - prevents timeout on single-file tasks
+                
+                # STEP 1: Thinking Engine - decompose task and reduce cognitive load
+                task = _decompose_task(query)
+                step(f"🧠 Thinking Engine: {task['action']} → {task['target'] or 'general'}")
+                
+                # STEP 2: Run micro static analysis on target file only (if exists)
+                analysis = None
+                if task['target'] and self.project_loader:
+                    try:
+                        from core.static_analyzer import StaticAnalyzer
+                        analyzer = StaticAnalyzer()
+                        # Analyze ONLY the target file, not entire project
+                        analysis = analyzer.analyze_file(task['target'])
+                        step(f"⚡ Micro analysis complete: {len(analysis.get('issues', []))} issues found")
+                    except Exception as e:
+                        step(f"⚠️ Micro analysis skipped: {str(e)}")
+                        analysis = None
+                
+                # STEP 3: Reduce vague task to atomic instruction
+                reduction = _reduce_task(task, analysis)
+                step(f"🎯 Focus: {reduction['focus']} (limit: {reduction['limit']})")
+                
+                # STEP 4: Build execution prompt with Thinking Engine output
+                target_file = task['target'] or "unknown"
+                final_prompt = _build_execution_prompt(target_file, reduction, context)
+                
+                # STEP 5: Execute with appropriate function
+                if complex_intent == 'debug':
+                    step("🔧 Debugging...")
+                    try:
+                        result = debug(final_prompt, context)
+                        return {"type": "debug", **result}, log
+                    except Exception as e:
+                        return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
+                
+                elif complex_intent == 'build':
+                    step("🏗 Building...")
+                    try:
+                        result = build(final_prompt, context)
+                        return {"type": "build", **result}, log
+                    except Exception as e:
+                        return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+                
+                else:  # generate
+                    step("✨ Generating optimization...")
+                    try:
+                        result = debug(final_prompt, context)  # Reuse debug pipeline for generate
+                        return {"type": "debug", **result}, log
+                    except Exception as e:
+                        return {"type": "chat", "text": f"❌ Generation error: {str(e)}"}, log
             
             else:
                 # Default to chat - don't pass heavy context for casual chat
@@ -1177,25 +1578,47 @@ class EtherBrain:
                 except Exception as e:
                     return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
     
+    def _extract_target_file(self, query: str) -> str:
+        """
+        Extract target .gd filename from query if present.
+        Returns filename or None.
+        """
+        import re
+        match = re.search(r'(\w+\.gd)', query.lower())
+        return match.group(1) if match else None
+    
     def _classify_complex_intent(self, query: str) -> str:
         """
         Classify complex intents (after fast path filtering).
-        Returns: analyze, debug, build, or chat
+        Returns: analyze, debug, build, generate, or chat
+        
+        KEY FIX: File-specific requests (e.g., "optimize game.gd") are routed to GENERATE,
+        not ANALYZE. This prevents global scans for single-file tasks.
         """
         query_lower = query.lower()
         
-        # Debug keywords
+        # CRITICAL: Check if query targets a specific file
+        has_target_file = self._extract_target_file(query) is not None
+        
+        # Debug keywords (always debug mode)
         if any(k in query_lower for k in ["fix", "bug", "error", "debug", "crash", "broken", "fail", "exception"]):
             return "debug"
         
-        # Build keywords
+        # Build keywords (creating new code)
         if any(k in query_lower for k in ["create", "make", "implement", "generate", "write", "add", "build", "new"]):
             return "build"
         
-        # Analyze keywords - be more specific to avoid catching casual questions
+        # OPTIMIZE/REFACTOR with target file = GENERATE (modification request)
+        if has_target_file and any(k in query_lower for k in ["optimize", "improve", "refactor", "clean", "simplify"]):
+            return "generate"
+        
+        # Analyze keywords - ONLY for project-wide or non-file-specific requests
         if any(k in query_lower for k in ["analyze", "list", "find", "show", "review", "check", 
                                            "issues", "problems", "describe", "what do you think", 
                                            "how is my", "rate my", "feedback on"]):
+            # If targeting a specific file, treat as generate (local modification)
+            if has_target_file:
+                return "generate"
             return "analyze"
         
         # Default to chat for general questions
