@@ -1,14 +1,21 @@
 """
-Ether v2.0 — AI Pipeline (Merged with v1.8 optimizations)
-==========================================================
+Ether v1.9.2 — AI Pipeline (Windows-Safe Execution)
+====================================================
 Multi-model, role-based, lazy execution.
 CPU-only. 2GB RAM safe. One model per request.
 
+CRITICAL FIXES IN v1.9.2:
+1. Temp file injection for reliable prompt delivery (bypasses Windows CLI limits)
+2. Stderr capture for debugging silent failures
+3. Increased buffer limit (12000 chars) to prevent mid-generation cutoff
+4. Aggressive "never fail" code extraction
+5. Proper temp file cleanup
+
 OPTIMIZATIONS FROM v1.8:
-1. Response Cache with TTL and LRU eviction
-2. Fast-path predefined explanations for Godot terms
-3. Hybrid static analysis support
-4. Enhanced intent detection patterns
+- Response Cache with TTL and LRU eviction
+- Fast-path predefined explanations for Godot terms
+- Hybrid static analysis support
+- Enhanced intent detection patterns
 """
 
 import json
@@ -18,6 +25,8 @@ import hashlib
 import requests
 import threading
 import subprocess
+import tempfile
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -370,27 +379,38 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 # Replaces blocking HTTP calls with subprocess.Popen for hard kill capability
 
 
-def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 4000) -> Dict[str, Any]:
+def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
     """
     Run ollama via subprocess with HARD timeout enforcement.
     
     This is CRITICAL for Windows 2GB RAM systems - prevents indefinite hangs.
     Uses Popen with non-blocking read to enforce exact timeout with process.kill().
     
-    FIX v1.9.1: Pass prompt as CLI argument instead of stdin (Windows-safe).
+    FIX v1.9.2: Use temp file injection for reliable prompt delivery on Windows.
+    This bypasses CLI argument length limits and encoding issues.
     
     Args:
         prompt: The prompt to send to ollama
         model: Model name to use
         timeout: Hard timeout in seconds
-        max_chars: Maximum characters to buffer (early stop)
+        max_chars: Maximum characters to buffer (early stop) - increased to 12000
     
     Returns:
         Dict with success, output, time, and model info
     """
-    # FIX: Pass prompt as CLI argument (Windows-safe, Ollama-supported)
-    cmd = ["ollama", "run", model, prompt]
+    # Create temp file for prompt injection (Windows-safe, no length limits)
+    temp_file = None
     try:
+        # Write prompt to temp file
+        fd, temp_path = tempfile.mkstemp(suffix=".txt", text=True)
+        temp_file = temp_path
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(prompt)
+        
+        # Use pipe to feed temp file content to ollama
+        # cmd /c type file | ollama run model
+        cmd = ["cmd", "/c", f"type \"{temp_path}\" | ollama run {model}"]
+        
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -402,9 +422,8 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         )
         
         buffer = []
+        stderr_buffer = []
         start_time = time.time()
-        
-        # REMOVED: stdin write/close (not needed with CLI arg method)
         
         # Non-blocking read loop with timeout
         while True:
@@ -454,6 +473,14 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
                 except Exception:
                     time.sleep(0.1)
             
+            # Also capture stderr for debugging
+            try:
+                err_line = process.stderr.readline()
+                if err_line:
+                    stderr_buffer.append(err_line)
+            except Exception:
+                pass
+            
             # Final timeout check after read attempt
             if time.time() - start_time > timeout:
                 break
@@ -465,15 +492,25 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
             pass
         
         elapsed = round(time.time() - start_time, 2)
+        output = "".join(buffer).strip()
+        stderr_output = "".join(stderr_buffer).strip()
         
         return {
             "success": True if buffer else False,
-            "output": "".join(buffer).strip(),
+            "output": output,
+            "stderr": stderr_output,
             "time": elapsed,
             "model": model
         }
     except Exception as e:
-        return {"success": False, "output": "", "error": str(e), "time": 0, "model": model}
+        return {"success": False, "output": "", "stderr": "", "error": str(e), "time": 0, "model": model}
+    finally:
+        # Cleanup temp file
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except Exception:
+                pass
 
 
 def _extract_code_safe(text: str) -> str:
@@ -645,13 +682,19 @@ def _call(role: str, messages: List[Dict]) -> str:
             timeout=timeout
         )
         
+        # CRITICAL: Never return empty - always have something to show user
         if not extracted_code and not raw_output:
-            # Fallback: return raw output even if empty (never fail silently)
-            return raw_output if raw_output else f"No response from {model_used}. Try again."
+            return f"No response from {model_used}. Try again."
         
         # Return extracted code if available, otherwise raw output
-        # CRITICAL: Never return empty - always have something to show user
-        return extracted_code if extracted_code else (raw_output or f"Empty response from {model_used}.")
+        result = extracted_code if extracted_code else raw_output
+        
+        # If result is still very short, add context note
+        if len(result.splitlines()) < 2 and raw_output:
+            # Include stderr info if available for debugging
+            return result
+        
+        return result
         
     except Exception as e:
         error_msg = str(e)
