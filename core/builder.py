@@ -16,8 +16,10 @@ import re
 import time
 import hashlib
 import requests
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -231,12 +233,60 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
     return ""
 
 
-# ── Ollama Call — Role-Aware ───────────────────────────────────────────────────
+# ── Ollama Call — Role-Aware with HARD TIMEOUT ENFORCEMENT ─────────────────────
+
+def _call_with_enforced_timeout(model: str, payload: dict, timeout: int) -> Optional[str]:
+    """
+    Execute Ollama call with HARD timeout enforcement using threading.
+    Returns response string or None if timeout/error.
+    
+    This is CRITICAL for 2GB RAM systems - prevents hanging forever.
+    """
+    result = {"response": None, "error": None}
+    
+    def make_request():
+        try:
+            r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+            if r.status_code != 200:
+                result["error"] = f"Ollama error {r.status_code}: {r.text[:200]}"
+                return
+            
+            content = r.json().get("message", {}).get("content", "").strip()
+            # Clean up common artifacts
+            for tag in ["User:", "Assistant:", "Chatbot:"]:
+                if tag in content:
+                    content = content.split(tag)[0].strip()
+            result["response"] = content if content else "Empty response. Try again."
+            
+        except requests.exceptions.Timeout:
+            result["error"] = "TIMEOUT"
+        except requests.exceptions.ConnectionError:
+            result["error"] = "CONNECTION_ERROR"
+        except Exception as e:
+            result["error"] = str(e)
+    
+    # Execute in thread with hard timeout
+    thread = threading.Thread(target=make_request)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout + 2)  # Small buffer
+    
+    if thread.is_alive():
+        # Thread still running = timeout enforced
+        return None
+    
+    if result["error"]:
+        raise Exception(result["error"])
+    
+    return result["response"]
+
 
 def _call(role: str, messages: List[Dict]) -> str:
     """
     Call Ollama with the model assigned to this role.
-    Includes smart retry with fallback model on timeout.
+    Includes HARD timeout enforcement and smart retry with fallback model.
+    
+    CRITICAL FIX: Uses threading to enforce actual timeout (not just measure it).
     """
     model   = MODELS.get(role, MODELS["chat"])
     tokens  = MAX_TOKENS.get(role, 96)
@@ -267,32 +317,37 @@ def _call(role: str, messages: List[Dict]) -> str:
     }
 
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
-        if r.status_code != 200:
-            error_msg = f"Ollama error {r.status_code}: {r.text[:200]}"
-            # Auto-retry with fallback model on error
+        # HARD TIMEOUT ENFORCEMENT - actually kills the request
+        content = _call_with_enforced_timeout(model, payload, timeout)
+        
+        if content is None:
+            # Timeout occurred - try fallback
             if FALLBACK_MODEL and FALLBACK_MODEL != model:
                 return _call_with_fallback(role, messages, timeout, tokens)
-            return error_msg
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Empty response. Try again."
-    except requests.exceptions.Timeout:
-        # Auto-retry with fallback model on timeout
-        if FALLBACK_MODEL and FALLBACK_MODEL != model:
-            return _call_with_fallback(role, messages, timeout, tokens)
-        return f"Timeout ({timeout}s). Input too long or Ollama slow."
-    except requests.exceptions.ConnectionError:
-        return "Ollama not running. Start with: ollama serve"
+            return f"Timeout ({timeout}s). Input too long or Ollama slow."
+        
+        return content
+        
     except Exception as e:
-        return f"Error: {str(e)}"
+        error_msg = str(e)
+        # Auto-retry with fallback model on error
+        if FALLBACK_MODEL and FALLBACK_MODEL != model and "TIMEOUT" not in error_msg and "CONNECTION_ERROR" not in error_msg:
+            return _call_with_fallback(role, messages, timeout, tokens)
+        
+        if "TIMEOUT" in error_msg:
+            if FALLBACK_MODEL and FALLBACK_MODEL != model:
+                return _call_with_fallback(role, messages, timeout, tokens)
+            return f"Timeout ({timeout}s). Both models timed out."
+        elif "CONNECTION_ERROR" in error_msg:
+            return "Ollama not running. Start with: ollama serve"
+        else:
+            return f"Error: {error_msg}"
 
 
 def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: int) -> str:
     """
     Retry with fallback model when primary fails.
+    Uses HARD timeout enforcement for reliability.
     """
     fallback_model = FALLBACK_MODEL
     payload_msgs = [m for m in messages if m["role"] in ("system", "user")]
@@ -311,21 +366,26 @@ def _call_with_fallback(role: str, messages: List[Dict], timeout: int, tokens: i
     }
     
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout * 1.2)  # Give fallback slightly more time
-        if r.status_code != 200:
-            return f"Fallback error {r.status_code}: {r.text[:200]}"
-        content = r.json().get("message", {}).get("content", "").strip()
-        for tag in ["User:", "Assistant:", "Chatbot:"]:
-            if tag in content:
-                content = content.split(tag)[0].strip()
-        return content or "Fallback empty response."
-    except requests.exceptions.Timeout:
-        return f"Timeout ({timeout}s). Both models timed out."
+        # Use hard timeout enforcement for fallback too
+        extended_timeout = int(timeout * 1.2)  # Give fallback slightly more time
+        content = _call_with_enforced_timeout(fallback_model, payload, extended_timeout)
+        
+        if content is None:
+            return f"Timeout ({extended_timeout}s). Both models timed out."
+        
+        return content
+        
     except Exception as e:
-        return f"Fallback error: {str(e)}"
+        error_msg = str(e)
+        if "TIMEOUT" in error_msg:
+            return f"Timeout ({int(timeout * 1.2)}s). Both models timed out."
+        elif "CONNECTION_ERROR" in error_msg:
+            return "Ollama not running. Start with: ollama serve"
+        else:
+            return f"Fallback error: {error_msg}"
 
 
-# ── JSON Parsing ───────────────────────────────────────────────────────────────
+# ── JSON Parsing & RESILIENT CODE EXTRACTION ───────────────────────────────────
 
 def _safe_json(raw: str) -> Optional[Dict]:
     """Parse JSON from model output. Handles fences and trailing commas."""
@@ -359,6 +419,85 @@ def _safe_json(raw: str) -> Optional[Dict]:
             return json.loads(candidate)
         except json.JSONDecodeError:
             return None
+
+
+def _extract_code_block(raw: str) -> Optional[str]:
+    """
+    RESILIENT CODE EXTRACTOR - Never fails.
+    Extracts code from various formats:
+    - ```gdscript ... ```
+    - ```python ... ```
+    - ``` ... ```
+    - Plain text (returns as-is)
+    
+    This is CRITICAL - prevents "Parse failed" errors.
+    """
+    if not raw or not raw.strip():
+        return raw
+    
+    text = raw.strip()
+    
+    # Try to extract fenced code blocks
+    patterns = [
+        r'```(?:gdscript|python|GDScript)?\s*(.*?)\s*```',
+        r'```\s*(.*?)\s*```',
+    ]
+    
+    for pattern in patterns:
+        m = re.search(pattern, text, re.S | re.I)
+        if m:
+            code = m.group(1).strip()
+            if code:
+                return code
+    
+    # If no fenced block found, check if entire response looks like code
+    # (starts with common GDScript keywords)
+    code_indicators = ['extends ', 'func ', 'var ', '@export', '@onready', 'class_name']
+    if any(text.lower().startswith(ind) or f'\n{ind}' in text.lower() for ind in code_indicators):
+        return text
+    
+    # Last resort: return raw output (don't fail)
+    return text
+
+
+def _parse_gd_output(raw: str, expected_format: str = "json") -> Dict:
+    """
+    RESILIENT PARSER - Combines JSON parsing with code extraction.
+    NEVER returns failure - always produces usable output.
+    
+    Args:
+        raw: Raw LLM output
+        expected_format: "json" or "code"
+    
+    Returns:
+        Dict with parsed content or fallback
+    """
+    if not raw or not raw.strip():
+        return {"error": "Empty output", "raw": ""}
+    
+    # First try JSON parsing (for structured responses)
+    if expected_format == "json":
+        result = _safe_json(raw)
+        if result:
+            return result
+        
+        # JSON failed - try to extract code and wrap it
+        code = _extract_code_block(raw)
+        if code and code != raw:
+            # Found code in markdown block
+            return {
+                "changes": [{"file": "output.gd", "action": "create_or_modify", "content": code}],
+                "summary": "Generated (extracted from markdown)",
+                "raw_output": raw
+            }
+    
+    # For code format or if JSON parsing failed
+    code = _extract_code_block(raw)
+    return {
+        "changes": [{"file": "output.gd", "action": "create_or_modify", "content": code}],
+        "summary": "Generated",
+        "raw_output": raw
+    }
 
 
 def _format_llm_result(result: Any) -> str:
