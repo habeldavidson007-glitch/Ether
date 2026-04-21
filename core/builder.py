@@ -1,15 +1,15 @@
 """
-Ether v1.9.2 — AI Pipeline (Windows-Safe Execution)
+Ether v1.9.6 — AI Pipeline (Windows-Safe Execution)
 ====================================================
 Multi-model, role-based, lazy execution.
 CPU-only. 2GB RAM safe. One model per request.
 
-CRITICAL FIXES IN v1.9.2:
-1. Temp file injection for reliable prompt delivery (bypasses Windows CLI limits)
-2. Stderr capture for debugging silent failures
-3. Increased buffer limit (12000 chars) to prevent mid-generation cutoff
-4. Aggressive "never fail" code extraction
-5. Proper temp file cleanup
+CRITICAL FIXES IN v1.9.6:
+1. Direct stdin pipe (NO shell/temp file) - fixes Windows path with spaces error
+2. Removed fragile "type file | ollama run" shell piping
+3. Manual streaming loop for partial output capture on timeout kill
+4. Hard kill with process.kill() at exact timeout limit
+5. Aggressive "never fail" code extraction
 
 OPTIMIZATIONS FROM v1.8:
 - Response Cache with TTL and LRU eviction
@@ -25,8 +25,6 @@ import hashlib
 import requests
 import threading
 import subprocess
-import tempfile
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -381,41 +379,37 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 
 def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
     """
-    Windows-safe subprocess wrapper using Temp File for input and Manual Streaming for output.
+    Windows-safe subprocess wrapper using direct stdin pipe (NO shell/temp file).
     Guarantees partial output capture even if killed at timeout.
     
-    FIX v1.9.4: Replaced communicate() with manual streaming loop to capture tokens as they arrive.
-    This prevents "No response" errors when process is killed mid-generation.
+    FIX v1.9.6: Removed fragile shell piping (type file | ollama) that failed on Windows paths with spaces.
+    Now uses direct stdin for reliable execution with manual streaming for partial capture.
     """
-    import tempfile
-    import os
-    
-    temp_path = None
     start_time = time.time()
     
     try:
-        # 1. Write prompt to temp file (bypasses Windows CLI length/encoding limits)
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
-            f.write(prompt)
-            temp_path = f.name
-        
-        # 2. Build command: type <file> | ollama run <model>
-        cmd = ["cmd", "/c", f"type \"{temp_path}\" | ollama run {model}"]
-        
+        # 1. Start process with direct stdin pipe (NO shell=True, NO temp files)
         process = subprocess.Popen(
-            cmd,
+            ["ollama", "run", model],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="ignore",
-            bufsize=1  # Line buffered
+            bufsize=1
         )
         
         buffer = []
-        stderr_buffer = []
         total_chars = 0
         timed_out = False
+        
+        # 2. Write prompt to stdin and close it immediately
+        try:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        except:
+            pass
         
         # 3. Manual Streaming Loop - captures output BEFORE kill
         while True:
@@ -493,14 +487,6 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
             "time": round(time.time() - start_time, 2),
             "model": model
         }
-    finally:
-        # 6. Cleanup temp file
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-
 
 
 def _extract_code_safe(text: str) -> str:
