@@ -2009,13 +2009,13 @@ Write fixed code now:"""
 
     def handle_optimize(self, file_path: str, user_query: str) -> str:
         """
-        Fused Optimization Pipeline:
+        Fused Optimization Pipeline v1.9.8 (Hybrid Python+LLM):
         1. Scoped Load (strictly cap at 600 chars)
         2. Static Analysis (instant, Python-native)
-        3. Lite Thinking Engine (2-step guided generation)
-        4. Return result
+        3. GodotFixer applies deterministic fixes using project context
+        4. LLM generates brief explanation only (no code generation)
         
-        Returns: Optimized code or error message.
+        Returns: Fixed code with explanation.
         """
         # STEP 1: Scoped Load
         if not self.project_loader:
@@ -2034,7 +2034,57 @@ Write fixed code now:"""
         issues = lightweight_analyzer(code)
         print(f"[DEBUG] Detected issues: {issues}")
 
-        # STEP 3: Lite Thinking Engine
-        result = self.thinking_engine_v2_lite(code, issues)
-
-        return result
+        # STEP 3: Godot-Specific Python Fixer (deterministic, uses knowledge/memory)
+        try:
+            from .godot_fixer import GodotFixer
+            
+            # Get paths to knowledge and memory (handle both /workspace and user project structures)
+            base_dir = Path(__file__).parent.parent
+            
+            # Try multiple possible locations for knowledge/memory
+            possible_knowledge_paths = [
+                base_dir / "knowledge" / "knowledge.json",
+                Path("/workspace/knowledge/knowledge.json"),
+                Path.cwd() / "knowledge" / "knowledge.json"
+            ]
+            possible_memory_paths = [
+                base_dir / "memory" / "memory.json",
+                Path("/workspace/memory/memory.json"),
+                Path.cwd() / "memory" / "memory.json"
+            ]
+            
+            knowledge_path = None
+            memory_path = None
+            
+            for p in possible_knowledge_paths:
+                if p.exists():
+                    knowledge_path = str(p)
+                    break
+            
+            for p in possible_memory_paths:
+                if p.exists():
+                    memory_path = str(p)
+                    break
+            
+            # Fallback to empty dicts if files don't exist
+            if not knowledge_path:
+                knowledge_path = str(base_dir / "knowledge" / "knowledge.json")
+            if not memory_path:
+                memory_path = str(base_dir / "memory" / "memory.json")
+            
+            project_path = getattr(self.project_loader, 'project_path', str(base_dir))
+            
+            fixer = GodotFixer(str(project_path), str(knowledge_path), str(memory_path))
+            fixed_code, applied_fixes = fixer.apply_fixes(code, issues)
+            explanation = fixer.generate_explanation(code, fixed_code, applied_fixes)
+            
+            print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
+            
+            # Return fixed code with explanation (NO LLM needed for code!)
+            return f"{explanation}\n\n```gdscript\n{fixed_code}\n```"
+            
+        except Exception as e:
+            print(f"[DEBUG] GodotFixer failed: {e}, falling back to LLM engine")
+            # Fallback to old LLM-based engine if fixer fails
+            result = self.thinking_engine_v2_lite(code, issues)
+            return result
