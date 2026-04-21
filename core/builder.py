@@ -22,6 +22,138 @@ from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 
+# ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
+# Converts vague user requests into atomic, bounded instructions for LLM
+# This removes "thinking" burden from the model and puts it in Python
+
+def _extract_filename(query: str) -> str:
+    """Extract .gd filename from query."""
+    import re
+    match = re.search(r'([\w\-]+\.gd)', query.lower())
+    return match.group(1) if match else ""
+
+
+def _decompose_task(query: str) -> dict:
+    """
+    Decompose user query into action and target.
+    Returns: {"action": str, "target": str}
+    """
+    q = query.lower()
+
+    action = "unknown"
+    if "optimize" in q or "improve" in q or "refactor" in q:
+        action = "optimize"
+    elif "fix" in q or "error" in q or "bug" in q or "broken" in q:
+        action = "debug"
+    elif "explain" in q or "what" in q or "how" in q:
+        action = "explain"
+    elif "create" in q or "make" in q or "add" in q:
+        action = "build"
+    elif "analyze" in q or "check" in q or "review" in q:
+        action = "analyze"
+    else:
+        action = "chat"
+
+    return {
+        "action": action,
+        "target": _extract_filename(q)
+    }
+
+
+def _reduce_task(task: dict, analysis: dict) -> dict:
+    """
+    Convert vague task into atomic instruction based on static analysis.
+    This is the CORE of the Thinking Engine - reduces LLM cognitive load.
+    
+    Returns: {"focus": str, "instruction": str, "limit": str}
+    """
+    issues = analysis.get("issues", []) if analysis else []
+    issue_str = ", ".join(issues).lower() if issues else ""
+
+    # Priority-based reduction: specific issues get specific fixes
+    if "velocity" in issue_str or "movement" in issue_str:
+        return {
+            "focus": "movement logic",
+            "instruction": "normalize velocity handling and ensure delta is applied correctly",
+            "limit": "max 30 lines"
+        }
+
+    if "delta" in issue_str or "_process" in issue_str:
+        return {
+            "focus": "_process function",
+            "instruction": "add delta parameter and use it for frame-independent movement",
+            "limit": "max 20 lines"
+        }
+
+    if "signal" in issue_str or "connect" in issue_str:
+        return {
+            "focus": "signal connections",
+            "instruction": "ensure signals are properly connected and disconnected",
+            "limit": "max 25 lines"
+        }
+
+    if "variable" in issue_str or "unused" in issue_str:
+        return {
+            "focus": "code cleanup",
+            "instruction": "remove unused variables and improve code organization",
+            "limit": "max 20 lines"
+        }
+
+    # Fallback based on action type
+    if task["action"] == "optimize":
+        return {
+            "focus": "code structure",
+            "instruction": "reduce redundancy, improve readability, and apply Godot best practices",
+            "limit": "max 25 lines"
+        }
+
+    if task["action"] == "debug":
+        return {
+            "focus": "bug fix",
+            "instruction": "identify and fix the root cause of the reported issue",
+            "limit": "max 30 lines"
+        }
+
+    if task["action"] == "build":
+        return {
+            "focus": "new feature",
+            "instruction": "implement the requested functionality following Godot conventions",
+            "limit": "max 30 lines"
+        }
+
+    # Default fallback
+    return {
+        "focus": "general improvement",
+        "instruction": "make minimal necessary improvements for clarity and efficiency",
+        "limit": "max 20 lines"
+    }
+
+
+def _build_execution_prompt(file: str, reduction: dict, context: str) -> str:
+    """
+    Build a constrained execution prompt that tells LLM exactly what to do.
+    No analysis, no thinking - just execution.
+    """
+    return f"""File: {file}
+
+Focus: {reduction['focus']}
+
+Instruction:
+{reduction['instruction']}
+
+Constraints:
+- Modify only necessary parts
+- Do not rewrite entire file
+- {reduction['limit']}
+- Output code only, no explanations
+
+Context:
+{context}
+
+Output:
+Code only."""
+
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -1381,20 +1513,39 @@ class EtherBrain:
                     return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
             
             elif complex_intent in ('generate', 'build', 'debug'):
-                # FILE-SPECIFIC PIPELINE: Use scoped_loader (NO global analyzer)
+                # FILE-SPECIFIC PIPELINE: Use scoped_loader + THINKING ENGINE
                 # This is the CRITICAL FIX - prevents timeout on single-file tasks
-                target_file = self._extract_target_file(query)
                 
-                if target_file and self.project_loader:
-                    step(f"📁 Targeting file: {target_file}")
-                    # Use scoped loader for focused context (depth=1, max 3 files)
-                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_BUILD)
-                    step("⚡ Scoped context loaded (no global scan)")
+                # STEP 1: Thinking Engine - decompose task and reduce cognitive load
+                task = _decompose_task(query)
+                step(f"🧠 Thinking Engine: {task['action']} → {task['target'] or 'general'}")
                 
+                # STEP 2: Run micro static analysis on target file only (if exists)
+                analysis = None
+                if task['target'] and self.project_loader:
+                    try:
+                        from core.static_analyzer import StaticAnalyzer
+                        analyzer = StaticAnalyzer()
+                        # Analyze ONLY the target file, not entire project
+                        analysis = analyzer.analyze_file(task['target'])
+                        step(f"⚡ Micro analysis complete: {len(analysis.get('issues', []))} issues found")
+                    except Exception as e:
+                        step(f"⚠️ Micro analysis skipped: {str(e)}")
+                        analysis = None
+                
+                # STEP 3: Reduce vague task to atomic instruction
+                reduction = _reduce_task(task, analysis)
+                step(f"🎯 Focus: {reduction['focus']} (limit: {reduction['limit']})")
+                
+                # STEP 4: Build execution prompt with Thinking Engine output
+                target_file = task['target'] or "unknown"
+                final_prompt = _build_execution_prompt(target_file, reduction, context)
+                
+                # STEP 5: Execute with appropriate function
                 if complex_intent == 'debug':
                     step("🔧 Debugging...")
                     try:
-                        result = debug(query, context)
+                        result = debug(final_prompt, context)
                         return {"type": "debug", **result}, log
                     except Exception as e:
                         return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
@@ -1402,7 +1553,7 @@ class EtherBrain:
                 elif complex_intent == 'build':
                     step("🏗 Building...")
                     try:
-                        result = build(query, context)
+                        result = build(final_prompt, context)
                         return {"type": "build", **result}, log
                     except Exception as e:
                         return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
@@ -1410,7 +1561,7 @@ class EtherBrain:
                 else:  # generate
                     step("✨ Generating optimization...")
                     try:
-                        result = debug(query, context)  # Reuse debug pipeline for generate
+                        result = debug(final_prompt, context)  # Reuse debug pipeline for generate
                         return {"type": "debug", **result}, log
                     except Exception as e:
                         return {"type": "chat", "text": f"❌ Generation error: {str(e)}"}, log
