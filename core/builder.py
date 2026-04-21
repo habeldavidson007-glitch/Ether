@@ -1598,6 +1598,7 @@ class EtherBrain:
         self.project_fingerprint = "empty"
         self.history: List[Dict[str, str]] = []
         self.chat_mode = "mixed"
+        self.last_optimized_code: Optional[str] = None  # Store last optimized code for /save command
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -2103,9 +2104,14 @@ Write fixed code now:"""
                     remaining_lines = len(fixed_lines) - max_display_lines
                     preview_code += f"\n\n# ... ({remaining_lines} more lines truncated - full code saved internally)"
                     
+                    # Store full code in brain for /save command
+                    self.last_optimized_code = fixed_code
+                    
                     return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Full optimized code ready (use /save to export if needed)"
                 else:
                     # Small file, show all
+                    # Store full code for /save command
+                    self.last_optimized_code = fixed_code
                     return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
             else:
                 # No fixes applied - show small preview
