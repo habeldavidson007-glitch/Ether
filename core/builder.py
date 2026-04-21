@@ -467,6 +467,75 @@ def _validate_gdscript(code: str) -> List[str]:
     return issues
 
 
+# ── Hard Output Constraint System (CRITICAL SAFETY LAYER) ──────────────────────
+
+def enforce_max_lines(code: str, max_lines: int = 30) -> str:
+    """
+    HARD CAP: Enforce maximum line count on generated code.
+    This is the primary defense against RAM spikes and infinite generation.
+    
+    Why this matters:
+    - Token limits are soft (model may try to use all tokens)
+    - Line limits are hard (immediate truncation)
+    - Prevents decoding pressure on low-RAM systems
+    """
+    if not code:
+        return code
+    
+    lines = code.splitlines()
+    if len(lines) <= max_lines:
+        return code
+    
+    # Truncate with clear indicator
+    truncated = "\n".join(lines[:max_lines])
+    return truncated + "\n# [OUTPUT TRUNCATED: max lines reached]"
+
+
+def validate_code_safety(code: str) -> Tuple[bool, str]:
+    """
+    SECURITY GATE: Block dangerous patterns AFTER generation.
+    Returns (is_safe, reason_if_unsafe)
+    
+    Banned patterns:
+    - File system access outside workspace
+    - Dynamic code loading
+    - Infinite loops / recursion without guards
+    - External network calls
+    """
+    if not code:
+        return False, "Empty code"
+    
+    banned_patterns = [
+        ("extends Node3D", "Node3D requires 3D resources"),
+        ("class_name ", "Global class registration not allowed"),
+        ("load(\"res://", "Dynamic resource loading blocked"),
+        ("preload(\"res://", "Preload blocked in generated code"),
+        ("OS.execute(", "System command execution blocked"),
+        ("DirAccess.", "Direct filesystem access blocked"),
+        ("FileAccess.", "Direct file access blocked"),
+        ("HTTPRequest", "Network requests blocked"),
+        ("while true:", "Infinite loop detected"),
+        ("while True:", "Infinite loop detected"),
+    ]
+    
+    for pattern, reason in banned_patterns:
+        if pattern in code:
+            return False, reason
+    
+    # Check for excessive recursion
+    func_calls = re.findall(r'(\w+)\s*\([^)]*\)', code)
+    func_defs = set(re.findall(r'^func\s+(\w+)\s*\(', code, re.MULTILINE))
+    
+    for func_name in func_defs:
+        call_count = func_calls.count(func_name)
+        if call_count > 3:  # Potential recursive loop
+            # Allow if there's a base case check
+            if f"if not {func_name}" not in code and f"if !{func_name}" not in code:
+                return False, f"Potential unsafe recursion in '{func_name}'"
+    
+    return True, "OK"
+
+
 # ── System Prompts ─────────────────────────────────────────────────────────────
 
 _GODOT_BASE = (
@@ -488,7 +557,7 @@ _CHAT_SYSTEM    = _GODOT_BASE + " Be direct and concise. No JSON — plain text 
 # ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 def _generate(task: str, context: str) -> Dict:
-    """GENERATE role - ultra-light for 1.5B models"""
+    """GENERATE role - ultra-light for 1.5B models with HARD OUTPUT CONSTRAINTS"""
     ctx = _trim_context(context, task, task_type="build")[:150]  # Hard cap
     user_content = f"Task:{task}\nCode:{ctx}" if ctx else f"Task:{task}"
     
@@ -502,11 +571,23 @@ def _generate(task: str, context: str) -> Dict:
     result = _safe_json(raw)
     if not result:
         result = {"changes": [{"file": "output.gd", "action": "create_or_modify", "content": raw}], "summary": "Generated"}
+
+    # CRITICAL: Apply hard output constraints AFTER generation (seatbelt system)
+    if "changes" in result and isinstance(result["changes"], list):
+        for change in result["changes"]:
+            if "content" in change:
+                # Enforce line limit
+                change["content"] = enforce_max_lines(change["content"], max_lines=30)
+                # Validate safety
+                is_safe, reason = validate_code_safety(change["content"])
+                if not is_safe:
+                    change["content"] = f"# INVALID PATCH REJECTED: {reason}\n" + change["content"][:200]
+
     return result
 
 
 def _debug(task: str, context: str) -> Dict:
-    """DEBUG role - ultra-light for 1.5B models"""
+    """DEBUG role - ultra-light for 1.5B models with HARD OUTPUT CONSTRAINTS"""
     ctx = _trim_context(context, task, task_type="default")[:150]  # Hard cap
     user_content = f"Error:{task}\nCode:{ctx}" if ctx else f"Error:{task}"
     
@@ -520,6 +601,18 @@ def _debug(task: str, context: str) -> Dict:
     result = _safe_json(raw)
     if not result:
         result = {"root_cause": "See output", "changes": [], "explanation": raw.strip() or "No output"}
+
+    # CRITICAL: Apply hard output constraints AFTER generation (seatbelt system)
+    if "changes" in result and isinstance(result["changes"], list):
+        for change in result["changes"]:
+            if "content" in change:
+                # Enforce line limit
+                change["content"] = enforce_max_lines(change["content"], max_lines=30)
+                # Validate safety
+                is_safe, reason = validate_code_safety(change["content"])
+                if not is_safe:
+                    change["content"] = f"# INVALID PATCH REJECTED: {reason}\n" + change["content"][:200]
+
     return result
 
 
