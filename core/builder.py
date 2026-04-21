@@ -2009,13 +2009,12 @@ Write fixed code now:"""
 
     def handle_optimize(self, file_path: str, user_query: str) -> str:
         """
-        Fused Optimization Pipeline v1.9.8 (Hybrid Python+LLM):
-        1. Scoped Load (strictly cap at 600 chars)
-        2. Static Analysis (instant, Python-native)
-        3. GodotFixer applies deterministic fixes using project context
-        4. LLM generates brief explanation only (no code generation)
+        Fused Optimization Pipeline v1.9.8 (3-Step Hybrid Python+LLM):
+        1. GodotFixer applies deterministic fixes (unlimited chars)
+        2. GodotExplainer compares and explains changes
+        3. LLM Summarizer generates brief summary (≤600 chars)
         
-        Returns: Fixed code with explanation.
+        Returns: Fixed code with explanation and LLM summary.
         """
         # STEP 1: Load Full File (GodotFixer needs complete context for unused var detection)
         if not self.project_loader:
@@ -2035,6 +2034,7 @@ Write fixed code now:"""
         # STEP 3: Godot-Specific Python Fixer (deterministic, uses existing workspace files)
         try:
             from .godot_fixer import GodotFixer
+            from .godot_explainer import GodotExplainer
             
             # Get path to existing workspace structure
             base_dir = Path(__file__).parent.parent
@@ -2055,15 +2055,36 @@ Write fixed code now:"""
             # Initialize fixer with existing workspace (no separate knowledge.json needed)
             fixer = GodotFixer(str(workspace_path))
             fixed_code, applied_fixes = fixer.apply_fixes(code, issues)
-            explanation = fixer.generate_explanation(code, fixed_code, applied_fixes)
+            
+            # STEP 4: Godot Explainer - Compare and explain changes
+            explainer = GodotExplainer()
+            comparison = explainer.compare(code, fixed_code)
+            explanation = explainer._generate_explanation()
             
             print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
+            print(f"[DEBUG] Explainer detected {comparison['lines_changed']} changes")
             
-            # Return fixed code with explanation (NO LLM needed for code!)
-            return f"{explanation}\n\n```gdscript\n{fixed_code}\n```"
+            # STEP 5: LLM Summarizer (only if changes were made)
+            if comparison['lines_changed'] > 0:
+                summary_prompt = explainer.get_summary_prompt(comparison)
+                print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
+                
+                # Call LLM for brief summary only
+                _, llm_summary, _, _ = self._call_llm_with_retry(
+                    summary_prompt,
+                    primary_model=self.primary_model,
+                    fallback_model=self.fallback_model,
+                    timeout=15  # Short timeout for summary
+                )
+                
+                if llm_summary and llm_summary.strip():
+                    explanation += f"\n\n✨ {llm_summary.strip()}"
+            
+            # Return fixed code with explanation and LLM summary
+            return f"{explanation}\\n\\n```gdscript\\n{fixed_code}\\n```"
             
         except Exception as e:
-            print(f"[DEBUG] GodotFixer failed: {e}, falling back to LLM engine")
+            print(f"[DEBUG] GodotFixer/Explainer failed: {e}, falling back to LLM engine")
             # Fallback to old LLM-based engine if fixer fails
             result = self.thinking_engine_v2_lite(code, issues)
             return result
