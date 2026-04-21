@@ -147,21 +147,45 @@ class GodotFixer:
         return fixed_code, applied_fixes
 
     def _remove_unused_variable(self, code: str, var_name: str) -> Tuple[str, bool]:
-        """Remove unused variable declaration safely."""
-        # Pattern: var var_name = ... or var var_name
-        pattern = rf'^\s*var\s+{re.escape(var_name)}\s*(?:=.*)?$'
-        new_code, count = re.subn(pattern, '', code, flags=re.MULTILINE)
-        if count > 0:
+        """Remove unused variable declaration safely. Handles: var x, var x = ..., var x: Type, var x: Type = ..."""
+        # Multiple patterns to handle different GDScript syntaxes
+        patterns = [
+            rf'^\s*var\s+{re.escape(var_name)}\s*[:=].*$',  # var name: Type or var name = value
+            rf'^\s*var\s+{re.escape(var_name)}\s*$',         # var name (no type, no value)
+        ]
+        
+        new_code = code
+        total_count = 0
+        
+        for pattern in patterns:
+            new_code, count = re.subn(pattern, '', new_code, flags=re.MULTILINE)
+            total_count += count
+            if count > 0:
+                break  # Found and removed, stop trying other patterns
+        
+        if total_count > 0:
             # Clean up extra blank lines
             new_code = re.sub(r'\n\s*\n\s*\n', '\n\n', new_code)
             return new_code, True
         return code, False
 
     def _remove_debug_prints(self, code: str) -> Tuple[str, bool]:
-        """Remove print() statements."""
-        pattern = r'^\s*print\(.*\)\s*$'
-        new_code, count = re.subn(pattern, '', code, flags=re.MULTILINE)
-        if count > 0:
+        """Remove print() statements and other debug output."""
+        patterns = [
+            r'^\s*print\(.*\)\s*$',           # print()
+            r'^\s*push_warning\(.*\)\s*$',   # push_warning()
+            r'^\s*push_error\(.*\)\s*$',     # push_error()
+        ]
+        
+        new_code = code
+        total_count = 0
+        
+        for pattern in patterns:
+            new_code, count = re.subn(pattern, '', new_code, flags=re.MULTILINE)
+            total_count += count
+        
+        if total_count > 0:
+            # Clean up extra blank lines
             new_code = re.sub(r'\n\s*\n\s*\n', '\n\n', new_code)
             return new_code, True
         return code, False
