@@ -1,8 +1,14 @@
 """
-Ether v1.9.6 — AI Pipeline (Windows-Safe Execution)
-====================================================
+Ether v1.9.8 — AI Pipeline (Windows-Safe Execution) with Hybrid 2-Step Fusion
+=============================================================================
 Multi-model, role-based, lazy execution.
 CPU-only. 2GB RAM safe. One model per request.
+
+CRITICAL FIXES IN v1.9.8:
+1. Zero-Cost Static Analyzer (Python-native issue detection)
+2. 2-Step Lite Thinking Engine (Refine → Rewrite pattern)
+3. Hybrid fusion: Python reasoning + LLM code generation
+4. Strict character limits (Code ≤600, Prompts ≤300-500)
 
 CRITICAL FIXES IN v1.9.6:
 1. Direct stdin pipe (NO shell/temp file) - fixes Windows path with spaces error
@@ -160,6 +166,39 @@ Context:
 
 Output:
 Code only."""
+
+
+# ── ZERO-COST STATIC ANALYZER (v1.9.8) ────────────────────────────────────────
+# Pure Python issue detection to offload reasoning from LLM
+
+def lightweight_analyzer(code: str) -> list:
+    """
+    Zero-cost static analysis to detect obvious issues without using LLM.
+    Returns: List of max 2 short string issues.
+    """
+    issues = []
+    lines = code.splitlines()
+    
+    # Detect long files
+    if len(lines) > 50:
+        issues.append("File too long")
+    
+    # Detect too many loops
+    if code.count("for ") > 2:
+        issues.append("Too many loops")
+    
+    # Detect debug prints
+    if "print(" in code:
+        issues.append("Debug prints left")
+    
+    # Simple unused variable check
+    vars_declared = re.findall(r"var (\w+)", code)
+    for v in vars_declared:
+        if code.count(v) == 1:
+            issues.append(f"Unused var: {v}")
+    
+    # Limit to top 2 issues
+    return issues[:2]
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -495,6 +534,8 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     Production-grade LLM caller with retry logic.
     Only retries if output is TRULY EMPTY, not just short.
     Returns: (raw_output, extracted_code, model_used, time_taken)
+    
+    v1.9.8: Now supports configurable timeout for 2-step thinking engine.
     """
     # Try primary model
     result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
@@ -517,7 +558,8 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     print("[DEBUG] Primary empty → trying fallback with simplified prompt")
     
     simplified_prompt = "Return ONLY GDScript code. Max 15 lines. No explanations.\n\n" + prompt[:300]
-    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
+    fallback_timeout = max(20, timeout - 10)  # Shorter timeout for fallback
+    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout)
     
     fallback_raw = fallback_result.get("output", "")
     fallback_extracted = _extract_code_safe(fallback_raw)
@@ -1510,13 +1552,14 @@ You are helpful and conversational. Be friendly but concise."""
 
 class EtherBrain:
     """
-    Ether v1.9 — Main Engine Class (Merged with v2.0 optimizations)
+    Ether v1.9.8 — Main Engine Class with Hybrid 2-Step Fusion
     
     Integrates:
     1. Intent-Aware Routing (fast path for simple queries)
     2. Lazy Loading Architecture (via project_loader)
     3. Cached Intelligence Layer (TTL-based response cache)
     4. v2.0 Role-based execution model
+    5. Zero-Cost Static Analyzer + 2-Step Lite Thinking Engine
     
     Usage:
         brain = EtherBrain()
@@ -1530,6 +1573,9 @@ class EtherBrain:
         self.project_fingerprint = "empty"
         self.history: List[Dict[str, str]] = []
         self.chat_mode = "mixed"
+        # Model configuration for 2-step thinking engine
+        self.primary_model = PRIMARY_MODEL
+        self.fallback_model = FALLBACK_MODEL
     
     def load_project_from_zip(self, zip_data: bytes) -> Tuple[bool, str]:
         """
@@ -1837,3 +1883,100 @@ class EtherBrain:
     def clear_cache(self) -> None:
         """Clear the response cache."""
         _response_cache.clear()
+
+    # ── 2-STEP LITE THINKING ENGINE (v1.9.8) ────────────────────────────────────
+    # Guided generation: Refine Issues → Rewrite Code
+
+    def thinking_engine_v2_lite(self, code: str, detected_issues: list) -> str:
+        """
+        2-Step Guided Generation: Refine Issues -> Rewrite Code.
+        
+        Step 1 (Refine): Send Python-detected issues to LLM for brief refinement.
+        Step 2 (Rewrite): Send refined issues + code snippet, ask ONLY for fixed code.
+        
+        Returns: Improved code or fallback message.
+        """
+        # Hard limit on code size
+        code = code[:600]
+        
+        # Build issues text
+        issues_text = ", ".join(detected_issues) if detected_issues else "Improve code quality"
+
+        # STEP 1: Refine issues (Tiny prompt, short timeout)
+        prompt_1 = f"Refine these issues briefly:\n{issues_text}\nMax 2 lines."
+        prompt_1 = prompt_1[:300]  # Enforce strict limit
+        
+        print(f"[DEBUG] Step 1 Prompt: {prompt_1}")
+        
+        # Use existing retry logic with short timeout (~10s)
+        _, refined_issues, _, _ = self._call_llm_with_retry_wrapper(
+            prompt_1, 
+            primary_model=self.primary_model, 
+            fallback_model=self.fallback_model,
+            timeout=10
+        )
+        
+        # Fallback if refinement failed
+        if not refined_issues.strip():
+            refined_issues = issues_text
+        
+        print(f"[DEBUG] Refined issues: {refined_issues}")
+
+        # STEP 2: Rewrite code (Guided generation)
+        prompt_2 = f"""Fix this GDScript:
+Issues: {refined_issues[:150]}
+Code:
+{code}
+Return only code. Max 15 lines. Start with code:"""
+        prompt_2 = prompt_2[:500]  # Enforce strict limit
+        
+        print(f"[DEBUG] Step 2 Prompt length: {len(prompt_2)}")
+        
+        _, improved, _, time_taken = self._call_llm_with_retry_wrapper(
+            prompt_2,
+            primary_model=self.primary_model,
+            fallback_model=self.fallback_model,
+            timeout=25
+        )
+        
+        print(f"[DEBUG] Step 2 took {time_taken}s, output length: {len(improved) if improved else 0}")
+        
+        return improved.strip() if improved.strip() else "Could not optimize."
+
+    def _call_llm_with_retry_wrapper(self, prompt: str, primary_model: str, fallback_model: str, timeout: int = 60) -> Tuple[str, str, str, float]:
+        """Wrapper to call _call_llm_with_retry function from within EtherBrain class."""
+        return _call_llm_with_retry(prompt, primary_model, fallback_model, timeout)
+
+    # ── OPTIMIZATION HANDLER (v1.9.8 Fusion Pipeline) ───────────────────────────
+    # Fused: Scoped Load → Analyze → Lite Think → Generate
+
+    def handle_optimize(self, file_path: str, user_query: str) -> str:
+        """
+        Fused Optimization Pipeline:
+        1. Scoped Load (strictly cap at 600 chars)
+        2. Static Analysis (instant, Python-native)
+        3. Lite Thinking Engine (2-step guided generation)
+        4. Return result
+        
+        Returns: Optimized code or error message.
+        """
+        # STEP 1: Scoped Load
+        if not self.project_loader:
+            return "No project loaded."
+        
+        code = self.project_loader.load_file(file_path)
+        if not code:
+            return "Could not load file."
+        
+        # Enforce hard limit
+        code = code[:600]
+        print(f"[DEBUG] Loaded code length: {len(code)}")
+
+        # STEP 2: Static Analysis (Instant)
+        issues = lightweight_analyzer(code)
+        print(f"[DEBUG] Detected issues: {issues}")
+
+        # STEP 3: Lite Thinking Engine
+        result = self.thinking_engine_v2_lite(code, issues)
+
+        return result
