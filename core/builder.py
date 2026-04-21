@@ -2017,20 +2017,18 @@ Write fixed code now:"""
         
         Returns: Fixed code with explanation.
         """
-        # STEP 1: Scoped Load
+        # STEP 1: Load Full File (GodotFixer needs complete context for unused var detection)
         if not self.project_loader:
             return "No project loaded."
         
-        # Use get_content instead of load_file
+        # Use get_content - DO NOT truncate, fixer needs full file to detect unused vars correctly
         code = self.project_loader.get_content(file_path)
         if not code:
             return "Could not load file."
         
-        # Enforce hard limit
-        code = code[:600]
-        print(f"[DEBUG] Loaded code length: {len(code)}")
+        print(f"[DEBUG] Loaded full code length: {len(code)} chars ({len(code.splitlines())} lines)")
 
-        # STEP 2: Static Analysis (Instant)
+        # STEP 2: Static Analysis on FULL code (Instant)
         issues = lightweight_analyzer(code)
         print(f"[DEBUG] Detected issues: {issues}")
 
