@@ -413,6 +413,7 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         )
         
         buffer = []
+        stderr_buffer = []
         total_chars = 0
         timed_out = False
         
@@ -463,13 +464,22 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         except:
             pass
         
-        # 5. Compile result
+        # 5. Read stderr (non-blocking)
+        stderr_output = ""
+        if process.stderr:
+            try:
+                stderr_output = process.stderr.read()
+            except:
+                pass
+        
+        # 6. Compile result
         output = "".join(buffer).strip()
         elapsed_rounded = round(time.time() - start_time, 2)
         
         return {
             "success": True if output else False,
             "output": output,
+            "stderr": stderr_output,
             "time": elapsed_rounded,
             "model": model,
             "timed_out": timed_out
@@ -549,22 +559,40 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     Returns:
         Tuple of (raw_output, extracted_code, model_used, time_taken)
     """
+    # DEBUG: Log prompt size
+    print(f"\n[DEBUG] Prompt length: {len(prompt)} chars")
+    
     # First attempt with primary model
     result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
     raw_output = result.get("output", "")
+    stderr_output = result.get("stderr", "")
     extracted = _extract_code_safe(raw_output)
     time_taken = result.get("time", 0)
+    
+    # DEBUG: Log what we got
+    print(f"[DEBUG] Raw output length: {len(raw_output)} chars")
+    print(f"[DEBUG] Extracted code length: {len(extracted)} chars")
+    print(f"[DEBUG] Stderr: {stderr_output[:200] if stderr_output else 'None'}")
+    print(f"[DEBUG] Exit success: {result.get('success', False)}")
     
     # CRITICAL FIX: Only retry if output is TRULY EMPTY, not just short
     # Accept ANY non-empty output from small models (even 1-2 lines)
     if not extracted.strip() and fallback_model != primary_model:
-        # Retry with simplified prompt and fallback model
-        simplified_prompt = f"Fix this briefly: {prompt[:200]}"
+        print(f"[DEBUG] Primary output empty, trying fallback with simplified prompt...")
+        # Retry with SIMPLIFIED prompt - remove all structure, just code request
+        simplified_prompt = f"""Return ONLY GDScript code. No explanations. Max 15 lines.
+
+{prompt[:300]}"""
         fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
         fallback_raw = fallback_result.get("output", "")
+        fallback_stderr = fallback_result.get("stderr", "")
         fallback_extracted = _extract_code_safe(fallback_raw)
         
-        # Use fallback result if primary was empty
+        print(f"[DEBUG] Fallback raw output length: {len(fallback_raw)} chars")
+        print(f"[DEBUG] Fallback extracted length: {len(fallback_extracted)} chars")
+        print(f"[DEBUG] Fallback stderr: {fallback_stderr[:200] if fallback_stderr else 'None'}")
+        
+        # Use fallback result
         return (
             fallback_raw,
             fallback_extracted,
