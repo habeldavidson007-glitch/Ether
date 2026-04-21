@@ -384,10 +384,10 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     Run ollama via subprocess with HARD timeout enforcement.
     
     This is CRITICAL for Windows 2GB RAM systems - prevents indefinite hangs.
-    Uses Popen with non-blocking read to enforce exact timeout with process.kill().
+    Uses Popen with communicate() timeout for reliable cross-platform execution.
     
-    FIX v1.9.2: Use temp file injection for reliable prompt delivery on Windows.
-    This bypasses CLI argument length limits and encoding issues.
+    FIX v1.9.3: Use communicate() with timeout instead of manual read loops.
+    This properly handles Windows pipe blocking issues.
     
     Args:
         prompt: The prompt to send to ollama
@@ -398,119 +398,64 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     Returns:
         Dict with success, output, time, and model info
     """
-    # Create temp file for prompt injection (Windows-safe, no length limits)
-    temp_file = None
+    start_time = time.time()
+    
     try:
-        # Write prompt to temp file
-        fd, temp_path = tempfile.mkstemp(suffix=".txt", text=True)
-        temp_file = temp_path
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(prompt)
-        
-        # Use pipe to feed temp file content to ollama
-        # cmd /c type file | ollama run model
-        cmd = ["cmd", "/c", f"type \"{temp_path}\" | ollama run {model}"]
+        # Direct command: ollama run model
+        # Using shell=True for better Windows compatibility with long prompts
+        cmd = f'ollama run {model}'
         
         process = subprocess.Popen(
             cmd,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="ignore",
-            bufsize=1
+            shell=True  # Critical for Windows to handle quotes properly
         )
         
-        buffer = []
-        stderr_buffer = []
-        start_time = time.time()
-        
-        # Non-blocking read loop with timeout
-        while True:
-            # Check if process finished naturally
-            if process.poll() is not None:
-                # Drain any remaining output
-                try:
-                    remaining = process.stdout.read()
-                    if remaining:
-                        buffer.append(remaining)
-                except Exception:
-                    pass
-                break
-            
-            # Check timeout BEFORE reading (critical!)
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
-                break
-            
-            # Try to read with small timeout to avoid blocking forever
-            # Use select on Unix for non-blocking I/O
+        # Use communicate with timeout - this is the KEY fix for Windows
+        # It handles both stdin write and stdout/stderr read atomically
+        try:
+            stdout, stderr = process.communicate(
+                input=prompt,
+                timeout=timeout
+            )
+            elapsed = round(time.time() - start_time, 2)
+            timed_out = False
+        except subprocess.TimeoutExpired:
+            # HARD KILL - terminate the process tree
             try:
-                import select
-                # Wait up to 0.5 seconds for data
-                ready, _, _ = select.select([process.stdout], [], [], 0.5)
-                if ready:
-                    line = process.stdout.readline()
-                    if line:
-                        buffer.append(line)
-                        # Early stop if buffer exceeds max_chars
-                        if sum(len(l) for l in buffer) > max_chars:
-                            break
-            except (ImportError, ValueError):
-                # Windows fallback: use readline with timeout check
-                # On Windows, select() doesn't work on pipes, so we use a different approach
-                # Read with a short sleep to prevent CPU spinning
-                try:
-                    # Try to read available data
-                    line = process.stdout.readline()
-                    if line:
-                        buffer.append(line)
-                        if sum(len(l) for l in buffer) > max_chars:
-                            break
-                    else:
-                        # No data available, sleep briefly to avoid blocking
-                        time.sleep(0.1)
-                except Exception:
-                    time.sleep(0.1)
-            
-            # Also capture stderr for debugging
-            try:
-                err_line = process.stderr.readline()
-                if err_line:
-                    stderr_buffer.append(err_line)
+                process.kill()
             except Exception:
                 pass
-            
-            # Final timeout check after read attempt
-            if time.time() - start_time > timeout:
-                break
+            # Try to get partial output
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except Exception:
+                stdout = ""
+                stderr = ""
+            elapsed = round(time.time() - start_time, 2)
+            timed_out = True
         
-        # HARD KILL - ensures process doesn't linger
-        try:
-            process.kill()
-        except Exception:
-            pass
-        
-        elapsed = round(time.time() - start_time, 2)
-        output = "".join(buffer).strip()
-        stderr_output = "".join(stderr_buffer).strip()
+        # Truncate if exceeds max_chars (early stop simulation)
+        if stdout and len(stdout) > max_chars:
+            stdout = stdout[:max_chars]
         
         return {
-            "success": True if buffer else False,
-            "output": output,
-            "stderr": stderr_output,
+            "success": True if stdout and stdout.strip() else False,
+            "output": stdout.strip() if stdout else "",
+            "stderr": stderr.strip() if stderr else "",
             "time": elapsed,
-            "model": model
+            "model": model,
+            "timed_out": timed_out
         }
+        
     except Exception as e:
-        return {"success": False, "output": "", "stderr": "", "error": str(e), "time": 0, "model": model}
-    finally:
-        # Cleanup temp file
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-            except Exception:
-                pass
+        return {"success": False, "output": "", "stderr": "", "error": str(e), "time": round(time.time() - start_time, 2), "model": model}
+
 
 
 def _extract_code_safe(text: str) -> str:
