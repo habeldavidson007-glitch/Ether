@@ -1,1 +1,41 @@
-Nothing should be ignored based on the provided file changes. The only modified file is 'core/builder.py', which appears to be a source code file and should not be added to .gitignore.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+build/
+dist/
+
+# Virtual environments
+venv/
+.venv/
+.env
+.env.local
+.env.*
+
+# Logs
+*.log
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# System
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+```

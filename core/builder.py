@@ -537,7 +537,7 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     """
     Call LLM with retry downgrade logic.
     
-    If primary model produces too short/messy output (< 3 lines of code),
+    If primary model produces EMPTY output (not just short),
     retry with simplified prompt and fallback model.
     
     Args:
@@ -555,25 +555,22 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     extracted = _extract_code_safe(raw_output)
     time_taken = result.get("time", 0)
     
-    # Check if output is too short/messy (less than 3 lines)
-    extracted_lines = extracted.splitlines() if extracted else []
-    
-    if len(extracted_lines) < 3 and fallback_model != primary_model:
+    # CRITICAL FIX: Only retry if output is TRULY EMPTY, not just short
+    # Accept ANY non-empty output from small models (even 1-2 lines)
+    if not extracted.strip() and fallback_model != primary_model:
         # Retry with simplified prompt and fallback model
         simplified_prompt = f"Fix this briefly: {prompt[:200]}"
         fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
         fallback_raw = fallback_result.get("output", "")
         fallback_extracted = _extract_code_safe(fallback_raw)
-        fallback_lines = fallback_extracted.splitlines() if fallback_extracted else []
         
-        # Use fallback result if it's better (more lines)
-        if len(fallback_lines) >= len(extracted_lines):
-            return (
-                fallback_raw,
-                fallback_extracted,
-                fallback_model,
-                fallback_result.get("time", 0)
-            )
+        # Use fallback result if primary was empty
+        return (
+            fallback_raw,
+            fallback_extracted,
+            fallback_model,
+            fallback_result.get("time", 0)
+        )
     
     return (raw_output, extracted, primary_model, time_taken)
 
