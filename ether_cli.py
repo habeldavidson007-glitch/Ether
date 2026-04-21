@@ -232,14 +232,18 @@ class EtherCLI:
         print("-" * 60)
         
         # Extract text from result with safe fallback
-        response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
+        if isinstance(result, str):
+            response = result
+        else:
+            response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
         
         # Check if this is an optimization result (contains full code)
+        # handle_optimize stores code in brain.last_optimized_code directly
         if hasattr(self.brain, 'last_optimized_code') and self.brain.last_optimized_code:
             self.last_optimized_code = self.brain.last_optimized_code
         
         # If this is a build/debug response, show change summary first
-        if result.get("type") == "build" or result.get("type") == "debug":
+        if isinstance(result, dict) and (result.get("type") == "build" or result.get("type") == "debug"):
             changes = result.get("changes", [])
             if changes:
                 print("\n📝 Changes Made:")

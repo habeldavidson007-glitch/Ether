@@ -2073,8 +2073,8 @@ Write fixed code now:"""
                 # Add brief explanation (no LLM needed for simple fixes)
                 output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
                 
-                # Only call LLM for complex explanations (>3 fixes)
-                if len(applied_fixes) > 3:
+                # Call LLM for summary when there are ANY fixes (not just >3)
+                if len(applied_fixes) > 0:
                     summary_prompt = explainer.get_summary_prompt(comparison)
                     print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
                     
