@@ -499,6 +499,7 @@ def _extract_code_safe(text: str) -> str:
     3. Fallback: scan for code keywords (func, var, if, =)
     4. Last resort: return truncated raw text
     
+    v1.9.8 FIX: Added 'extends' as code keyword for GDScript detection.
     Never returns empty string unless input is empty.
     """
     if not text or not text.strip():
@@ -516,7 +517,8 @@ def _extract_code_safe(text: str) -> str:
     
     # Priority 3: Fallback heuristic - scan for code keywords
     lines = text.splitlines()
-    code_keywords = ["func", "var", "if", "for", "class", "@export", "@onready"]
+    # v1.9.8 FIX: Added 'extends' for GDScript class detection
+    code_keywords = ["func", "var", "if", "for", "class", "@export", "@onready", "extends"]
     code_lines = [
         l for l in lines 
         if any(l.strip().startswith(k) for k in code_keywords) or "=" in l.strip()
@@ -557,7 +559,8 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     # 🔁 Fallback ONLY if truly empty
     print("[DEBUG] Primary empty → trying fallback with simplified prompt")
     
-    simplified_prompt = "Return ONLY GDScript code. Max 15 lines. No explanations.\n\n" + prompt[:300]
+    # v1.9.8 FIX: Even simpler fallback prompt for 1.5B models
+    simplified_prompt = f"Code:{prompt[:200]}\nOutput:"
     fallback_timeout = max(20, timeout - 10)  # Shorter timeout for fallback
     fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout)
     
@@ -1786,7 +1789,19 @@ class EtherBrain:
                 else:  # generate
                     step("✨ Generating optimization...")
                     try:
-                        result = debug(final_prompt, context)  # Reuse debug pipeline for generate
+                        # CRITICAL FIX v1.9.8: Use handle_optimize for file-specific optimization requests
+                        # This uses the 2-Step Lite Thinking Engine instead of generic debug pipeline
+                        target_file = task.get('target')
+                        if target_file and self.project_loader:
+                            # Check if this is an optimization/refactoring request
+                            query_lower = query.lower()
+                            if any(k in query_lower for k in ["optimize", "improve", "refactor", "clean", "simplify"]):
+                                step(f"🔧 Using Lite Thinking Engine for {target_file}")
+                                result_text = self.handle_optimize(target_file, query)
+                                return {"type": "chat", "text": result_text}, log
+                        
+                        # Fallback: Reuse debug pipeline for generate
+                        result = debug(final_prompt, context)
                         return {"type": "debug", **result}, log
                     except Exception as e:
                         return {"type": "chat", "text": f"❌ Generation error: {str(e)}"}, log
@@ -1896,15 +1911,17 @@ class EtherBrain:
         
         Returns: Improved code or fallback message.
         """
-        # Hard limit on code size
-        code = code[:600]
+        # Hard limit on code size - but be smarter about it
+        # Take first N lines that fit within 400 chars to leave room for instructions
+        max_code_chars = 400
+        code = code[:max_code_chars]
         
         # Build issues text
         issues_text = ", ".join(detected_issues) if detected_issues else "Improve code quality"
 
         # STEP 1: Refine issues (Tiny prompt, short timeout)
-        prompt_1 = f"Refine these issues briefly:\n{issues_text}\nMax 2 lines."
-        prompt_1 = prompt_1[:300]  # Enforce strict limit
+        prompt_1 = f"Issues:{issues_text}\nFix briefly:"
+        prompt_1 = prompt_1[:200]  # Enforce strict limit
         
         print(f"[DEBUG] Step 1 Prompt: {prompt_1}")
         
@@ -1922,12 +1939,13 @@ class EtherBrain:
         
         print(f"[DEBUG] Refined issues: {refined_issues}")
 
-        # STEP 2: Rewrite code (Guided generation)
-        prompt_2 = f"""Fix this GDScript:
-Issues: {refined_issues[:150]}
-Code:
+        # STEP 2: Rewrite code (ULTRA-SIMPLE prompt for 1.5B model)
+        # CRITICAL: Make prompt as simple as possible
+        prompt_2 = f"""Code:
 {code}
-Return only code. Max 15 lines. Start with code:"""
+
+Fix:{refined_issues[:80]}
+Output code only:"""
         prompt_2 = prompt_2[:500]  # Enforce strict limit
         
         print(f"[DEBUG] Step 2 Prompt length: {len(prompt_2)}")
