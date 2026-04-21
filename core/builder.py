@@ -381,80 +381,115 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 
 def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
     """
-    Run ollama via subprocess with HARD timeout enforcement.
+    Windows-safe subprocess wrapper using Temp File for input and Manual Streaming for output.
+    Guarantees partial output capture even if killed at timeout.
     
-    This is CRITICAL for Windows 2GB RAM systems - prevents indefinite hangs.
-    Uses Popen with communicate() timeout for reliable cross-platform execution.
-    
-    FIX v1.9.3: Use communicate() with timeout instead of manual read loops.
-    This properly handles Windows pipe blocking issues.
-    
-    Args:
-        prompt: The prompt to send to ollama
-        model: Model name to use
-        timeout: Hard timeout in seconds
-        max_chars: Maximum characters to buffer (early stop) - increased to 12000
-    
-    Returns:
-        Dict with success, output, time, and model info
+    FIX v1.9.4: Replaced communicate() with manual streaming loop to capture tokens as they arrive.
+    This prevents "No response" errors when process is killed mid-generation.
     """
+    import tempfile
+    import os
+    
+    temp_path = None
     start_time = time.time()
     
     try:
-        # Direct command: ollama run model
-        # Using shell=True for better Windows compatibility with long prompts
-        cmd = f'ollama run {model}'
+        # 1. Write prompt to temp file (bypasses Windows CLI length/encoding limits)
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+            f.write(prompt)
+            temp_path = f.name
+        
+        # 2. Build command: type <file> | ollama run <model>
+        cmd = ["cmd", "/c", f"type \"{temp_path}\" | ollama run {model}"]
         
         process = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="ignore",
-            shell=True  # Critical for Windows to handle quotes properly
+            bufsize=1  # Line buffered
         )
         
-        # Use communicate with timeout - this is the KEY fix for Windows
-        # It handles both stdin write and stdout/stderr read atomically
-        try:
-            stdout, stderr = process.communicate(
-                input=prompt,
-                timeout=timeout
-            )
-            elapsed = round(time.time() - start_time, 2)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            # HARD KILL - terminate the process tree
-            try:
-                process.kill()
-            except Exception:
-                pass
-            # Try to get partial output
-            try:
-                stdout, stderr = process.communicate(timeout=2)
-            except Exception:
-                stdout = ""
-                stderr = ""
-            elapsed = round(time.time() - start_time, 2)
-            timed_out = True
+        buffer = []
+        total_chars = 0
+        timed_out = False
         
-        # Truncate if exceeds max_chars (early stop simulation)
-        if stdout and len(stdout) > max_chars:
-            stdout = stdout[:max_chars]
+        # 3. Manual Streaming Loop - captures output BEFORE kill
+        while True:
+            elapsed = time.time() - start_time
+            
+            # Check timeout
+            if elapsed > timeout:
+                timed_out = True
+                break
+            
+            # Check character limit (early stop to save RAM)
+            if total_chars > max_chars:
+                break
+            
+            # Check if process ended naturally
+            if process.poll() is not None:
+                # Drain any remaining output
+                if process.stdout:
+                    try:
+                        remaining = process.stdout.read()
+                        if remaining:
+                            buffer.append(remaining)
+                    except:
+                        pass
+                break
+            
+            # Read line from stdout
+            if process.stdout:
+                try:
+                    line = process.stdout.readline()
+                    if line:
+                        buffer.append(line)
+                        total_chars += len(line)
+                    else:
+                        # No output yet, brief sleep to prevent CPU spin
+                        time.sleep(0.05)
+                except:
+                    break
+            else:
+                break
+        
+        # 4. HARD KILL
+        try:
+            process.kill()
+            process.wait(timeout=2)
+        except:
+            pass
+        
+        # 5. Compile result
+        output = "".join(buffer).strip()
+        elapsed_rounded = round(time.time() - start_time, 2)
         
         return {
-            "success": True if stdout and stdout.strip() else False,
-            "output": stdout.strip() if stdout else "",
-            "stderr": stderr.strip() if stderr else "",
-            "time": elapsed,
+            "success": True if output else False,
+            "output": output,
+            "time": elapsed_rounded,
             "model": model,
             "timed_out": timed_out
         }
-        
+
     except Exception as e:
-        return {"success": False, "output": "", "stderr": "", "error": str(e), "time": round(time.time() - start_time, 2), "model": model}
+        return {
+            "success": False,
+            "output": "",
+            "error": str(e),
+            "time": round(time.time() - start_time, 2),
+            "model": model
+        }
+    finally:
+        # 6. Cleanup temp file
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
 
 
 
