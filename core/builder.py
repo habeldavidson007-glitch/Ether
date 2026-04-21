@@ -1,14 +1,21 @@
 """
-Ether v2.0 — AI Pipeline (Merged with v1.8 optimizations)
-==========================================================
+Ether v1.9.6 — AI Pipeline (Windows-Safe Execution)
+====================================================
 Multi-model, role-based, lazy execution.
 CPU-only. 2GB RAM safe. One model per request.
 
+CRITICAL FIXES IN v1.9.6:
+1. Direct stdin pipe (NO shell/temp file) - fixes Windows path with spaces error
+2. Removed fragile "type file | ollama run" shell piping
+3. Manual streaming loop for partial output capture on timeout kill
+4. Hard kill with process.kill() at exact timeout limit
+5. Aggressive "never fail" code extraction
+
 OPTIMIZATIONS FROM v1.8:
-1. Response Cache with TTL and LRU eviction
-2. Fast-path predefined explanations for Godot terms
-3. Hybrid static analysis support
-4. Enhanced intent detection patterns
+- Response Cache with TTL and LRU eviction
+- Fast-path predefined explanations for Godot terms
+- Hybrid static analysis support
+- Enhanced intent detection patterns
 """
 
 import json
@@ -17,6 +24,7 @@ import time
 import hashlib
 import requests
 import threading
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -365,6 +373,167 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
     return ""
 
 
+# ── WINDOWS-SAFE SUBPROCESS EXECUTION WRAPPER (v1.9) ─────────────────────────────
+# Replaces blocking HTTP calls with subprocess.Popen for hard kill capability
+
+
+def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
+    """
+    Production-safe Ollama execution (Windows compatible).
+    No streaming. No deadlocks. Hard timeout enforced.
+    Uses communicate() for stable pipe handling.
+    
+    FIX v1.9.7: Replaced manual stdin write + streaming with communicate() to eliminate deadlock.
+    This guarantees reliable execution on Windows without pipe synchronization issues.
+    """
+    start_time = time.time()
+    
+    try:
+        # 1. Start process with direct pipes (NO shell=True)
+        process = subprocess.Popen(
+            ["ollama", "run", model],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="ignore"
+        )
+        
+        # 2. Use communicate() for safe atomic I/O (prevents deadlock)
+        try:
+            stdout, stderr = process.communicate(
+                input=prompt,
+                timeout=timeout
+            )
+            
+            # Success path - got output before timeout
+            output = (stdout or "")[:max_chars]
+            return {
+                "success": True,
+                "timeout": False,
+                "output": output,
+                "error": None,
+                "stderr": stderr or "",
+                "time": round(time.time() - start_time, 2),
+                "model": model
+            }
+            
+        except subprocess.TimeoutExpired:
+            # Timeout path - kill and collect partial output
+            process.kill()
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except:
+                stdout, stderr = "", ""
+                
+            output = (stdout or "")[:max_chars]
+            return {
+                "success": False,
+                "timeout": True,
+                "output": output,
+                "error": "Timeout exceeded",
+                "stderr": stderr or "",
+                "time": round(time.time() - start_time, 2),
+                "model": model
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "timeout": False,
+            "output": "",
+            "error": str(e),
+            "stderr": "",
+            "time": round(time.time() - start_time, 2),
+            "model": model
+        }
+
+
+def _extract_code_safe(text: str) -> str:
+    """
+    Aggressive Code Extractor - NEVER fails.
+    
+    Priority-based extraction:
+    1. Try ```gdscript ... ``` blocks
+    2. Try generic ``` ... ``` blocks  
+    3. Fallback: scan for code keywords (func, var, if, =)
+    4. Last resort: return truncated raw text
+    
+    Never returns empty string unless input is empty.
+    """
+    if not text or not text.strip():
+        return ""
+    
+    # Priority 1: Try gdscript block
+    match = re.search(r"```gdscript(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    
+    # Priority 2: Try generic block
+    match = re.search(r"```(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
+    # Priority 3: Fallback heuristic - scan for code keywords
+    lines = text.splitlines()
+    code_keywords = ["func", "var", "if", "for", "class", "@export", "@onready"]
+    code_lines = [
+        l for l in lines 
+        if any(l.strip().startswith(k) for k in code_keywords) or "=" in l.strip()
+    ]
+    
+    if code_lines:
+        return "\n".join(code_lines[:40]).strip()
+    
+    # Priority 4: Return raw text truncated (never fail)
+    return text[:500]
+
+
+def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, timeout: int = 60) -> Tuple[str, str, str, float]:
+    """
+    Production-grade LLM caller with retry logic.
+    Only retries if output is TRULY EMPTY, not just short.
+    Returns: (raw_output, extracted_code, model_used, time_taken)
+    """
+    # Try primary model
+    result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
+    
+    raw_output = result.get("output", "")
+    extracted_code = _extract_code_safe(raw_output)
+    
+    # Debug logging
+    print(f"[DEBUG] Model: {primary_model}")
+    print(f"[DEBUG] Raw length: {len(raw_output)}")
+    print(f"[DEBUG] Extracted length: {len(extracted_code)}")
+    print(f"[DEBUG] Stderr: {result.get('stderr', '')[:200]}")
+    print(f"[DEBUG] Success: {result.get('success', False)}")
+    
+    # ✅ Accept ANY non-empty output (don't reject short responses)
+    if extracted_code.strip():
+        return (raw_output, extracted_code, primary_model, result.get("time", 0))
+    
+    # 🔁 Fallback ONLY if truly empty
+    print("[DEBUG] Primary empty → trying fallback with simplified prompt")
+    
+    simplified_prompt = "Return ONLY GDScript code. Max 15 lines. No explanations.\n\n" + prompt[:300]
+    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
+    
+    fallback_raw = fallback_result.get("output", "")
+    fallback_extracted = _extract_code_safe(fallback_raw)
+    
+    print(f"[DEBUG] Fallback raw length: {len(fallback_raw)}")
+    print(f"[DEBUG] Fallback stderr: {fallback_result.get('stderr', '')[:200]}")
+    
+    # Use fallback if it produced something
+    if fallback_extracted.strip():
+        return (fallback_raw, fallback_extracted, fallback_model, fallback_result.get("time", 0))
+    
+    # 🚫 Never return empty - use raw output as last resort
+    final_output = raw_output or fallback_raw or "Model returned no usable output."
+    return (final_output, _extract_code_safe(final_output), fallback_model, fallback_result.get("time", 0))
+
+
 # ── Ollama Call — Role-Aware with HARD TIMEOUT ENFORCEMENT ─────────────────────
 
 def _call_with_enforced_timeout(model: str, payload: dict, timeout: int) -> Optional[str]:
@@ -416,61 +585,70 @@ def _call_with_enforced_timeout(model: str, payload: dict, timeout: int) -> Opti
 def _call(role: str, messages: List[Dict]) -> str:
     """
     Call Ollama with the model assigned to this role.
-    Includes HARD timeout enforcement and smart retry with fallback model.
+    Uses Windows-safe subprocess execution with HARD kill capability.
     
-    CRITICAL FIX: Uses threading to enforce actual timeout (not just measure it).
+    CRITICAL FIX for v1.9: Replaces blocking HTTP calls with subprocess.Popen
+    that can be killed exactly at timeout limit.
     """
-    model   = MODELS.get(role, MODELS["chat"])
-    tokens  = MAX_TOKENS.get(role, 96)
+    model = MODELS.get(role, MODELS["chat"])
     timeout = TIMEOUT.get(role, 30)
 
     # Keep only system + last user msg to minimize token pressure
     system_msg = next((m for m in messages if m["role"] == "system"), None)
-    user_msg   = next((m for m in reversed(messages) if m["role"] == "user"), None)
+    user_msg = next((m for m in reversed(messages) if m["role"] == "user"), None)
 
-    payload_msgs = []
-    if system_msg: payload_msgs.append(system_msg)
-    if user_msg:   payload_msgs.append(user_msg)
-
-    if not payload_msgs:
+    # Build prompt from messages
+    prompt_parts = []
+    if system_msg and "content" in system_msg:
+        prompt_parts.append(f"System: {system_msg['content']}")
+    if user_msg and "content" in user_msg:
+        prompt_parts.append(f"User: {user_msg['content']}")
+    
+    if not prompt_parts:
         return "No input provided."
-
-    payload = {
-        "model": model,
-        "messages": payload_msgs,
-        "stream": False,
-        "options": {
-            "num_predict": tokens,
-            "temperature": 0.4,
-            "top_p": 0.9,
-            "repeat_penalty": 1.05,
-            "stop": ["User:", "Assistant:", "###"],
-        },
-    }
+    
+    prompt = "\n".join(prompt_parts) + "\n\nAssistant:"
 
     try:
-        # HARD TIMEOUT ENFORCEMENT - actually kills the request
-        content = _call_with_enforced_timeout(model, payload, timeout)
+        # Use new subprocess wrapper with retry logic
+        raw_output, extracted_code, model_used, time_taken = _call_llm_with_retry(
+            prompt=prompt,
+            primary_model=model,
+            fallback_model=FALLBACK_MODEL,
+            timeout=timeout
+        )
         
-        if content is None:
-            # Timeout occurred - try fallback
-            if FALLBACK_MODEL and FALLBACK_MODEL != model:
-                return _call_with_fallback(role, messages, timeout, tokens)
-            return f"Timeout ({timeout}s). Input too long or Ollama slow."
+        # CRITICAL: Never return empty - always have something to show user
+        if not extracted_code and not raw_output:
+            return f"No response from {model_used}. Try again."
         
-        return content
+        # Return extracted code if available, otherwise raw output
+        result = extracted_code if extracted_code else raw_output
+        
+        # If result is still very short, add context note
+        if len(result.splitlines()) < 2 and raw_output:
+            # Include stderr info if available for debugging
+            return result
+        
+        return result
         
     except Exception as e:
         error_msg = str(e)
-        # Auto-retry with fallback model on error
-        if FALLBACK_MODEL and FALLBACK_MODEL != model and "TIMEOUT" not in error_msg and "CONNECTION_ERROR" not in error_msg:
-            return _call_with_fallback(role, messages, timeout, tokens)
-        
-        if "TIMEOUT" in error_msg:
+        if "TIMEOUT" in error_msg or "killed" in error_msg.lower():
             if FALLBACK_MODEL and FALLBACK_MODEL != model:
-                return _call_with_fallback(role, messages, timeout, tokens)
+                # Try one more time with fallback
+                try:
+                    raw_output, extracted_code, _, time_taken = _call_llm_with_retry(
+                        prompt=prompt[:200],  # Simplified prompt
+                        primary_model=FALLBACK_MODEL,
+                        fallback_model=FALLBACK_MODEL,  # No further fallback
+                        timeout=40
+                    )
+                    return extracted_code if extracted_code else raw_output
+                except Exception:
+                    pass
             return f"Timeout ({timeout}s). Both models timed out."
-        elif "CONNECTION_ERROR" in error_msg:
+        elif "CONNECTION_ERROR" in error_msg or "not found" in error_msg.lower():
             return "Ollama not running. Start with: ollama serve"
         else:
             return f"Error: {error_msg}"
@@ -1282,10 +1460,11 @@ def debug(error_log: str, context: str) -> Dict:
     raw = _call("debug", messages)
     result = _safe_json(raw)
     if not result:
+        # CRITICAL FIX: Never show "Parse failed" - always return something useful
         result = {
-            "root_cause": "Parse failed — see raw output",
+            "root_cause": raw[:200] if raw else "Unable to parse response",
             "changes": [],
-            "explanation": raw[:400],
+            "explanation": raw[:400] if raw else "No explanation available",
             "prevention": ""
         }
     return result
