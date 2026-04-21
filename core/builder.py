@@ -2063,7 +2063,7 @@ Write fixed code now:"""
             print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
             print(f"[DEBUG] Explainer detected {comparison['lines_changed']} changes")
             
-            # Build clean output: Summary + Change notification + Fixed code (background processing)
+            # Build clean output: Summary + Change notification + Fixed code preview (background processing)
             if comparison['lines_changed'] > 0 or len(applied_fixes) > 0:
                 # Create brief header with change count
                 lines_changed = comparison['lines_changed']
@@ -2087,11 +2087,31 @@ Write fixed code now:"""
                     if llm_summary and llm_summary.strip():
                         output_header += f"\n\n✨ {llm_summary.strip()}"
                 
-                # Return clean output: Header + Fixed code
-                return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
+                # TRUNCATE displayed code to prevent terminal overload (show preview only)
+                # Full code is available but we only show first 50 lines / ~1500 chars as preview
+                max_display_lines = 50
+                max_display_chars = 1500
+                fixed_lines = fixed_code.splitlines()
+                
+                if len(fixed_lines) > max_display_lines or len(fixed_code) > max_display_chars:
+                    preview_lines = fixed_lines[:max_display_lines]
+                    preview_code = "\n".join(preview_lines)
+                    if len(preview_code) > max_display_chars:
+                        preview_code = preview_code[:max_display_chars]
+                    
+                    # Truncate indicator
+                    remaining_lines = len(fixed_lines) - max_display_lines
+                    preview_code += f"\n\n# ... ({remaining_lines} more lines truncated - full code saved internally)"
+                    
+                    return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Full optimized code ready (use /save to export if needed)"
+                else:
+                    # Small file, show all
+                    return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
             else:
-                # No fixes applied
-                return "No specific improvements needed. Code follows GDScript best practices.\n\n```gdscript\n" + fixed_code + "\n```"
+                # No fixes applied - show small preview
+                preview_lines = fixed_code.splitlines()[:30]
+                preview_code = "\n".join(preview_lines)
+                return f"No specific improvements needed. Code follows GDScript best practices.\n\n```gdscript\n{preview_code}\n```... (truncated)"
             
         except Exception as e:
             print(f"[DEBUG] GodotFixer/Explainer failed: {e}, falling back to LLM engine")
