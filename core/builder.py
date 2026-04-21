@@ -2059,29 +2059,39 @@ Write fixed code now:"""
             # STEP 4: Godot Explainer - Compare and explain changes
             explainer = GodotExplainer()
             comparison = explainer.compare(code, fixed_code)
-            explanation = explainer._generate_explanation()
             
             print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
             print(f"[DEBUG] Explainer detected {comparison['lines_changed']} changes")
             
-            # STEP 5: LLM Summarizer (only if changes were made)
-            if comparison['lines_changed'] > 0:
-                summary_prompt = explainer.get_summary_prompt(comparison)
-                print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
+            # Build clean output: Summary + Change notification + Fixed code (background processing)
+            if comparison['lines_changed'] > 0 or len(applied_fixes) > 0:
+                # Create brief header with change count
+                lines_changed = comparison['lines_changed']
+                output_header = f"✓ Optimized: {lines_changed} improvement(s) made\n"
                 
-                # Call LLM for brief summary only
-                _, llm_summary, _, _ = self._call_llm_with_retry(
-                    summary_prompt,
-                    primary_model=self.primary_model,
-                    fallback_model=self.fallback_model,
-                    timeout=15  # Short timeout for summary
-                )
+                # Add brief explanation (no LLM needed for simple fixes)
+                output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
                 
-                if llm_summary and llm_summary.strip():
-                    explanation += f"\n\n✨ {llm_summary.strip()}"
-            
-            # Return fixed code with explanation and LLM summary
-            return f"{explanation}\\n\\n```gdscript\\n{fixed_code}\\n```"
+                # Only call LLM for complex explanations (>3 fixes)
+                if len(applied_fixes) > 3:
+                    summary_prompt = explainer.get_summary_prompt(comparison)
+                    print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
+                    
+                    _, llm_summary, _, _ = self._call_llm_with_retry(
+                        summary_prompt,
+                        primary_model=self.primary_model,
+                        fallback_model=self.fallback_model,
+                        timeout=15
+                    )
+                    
+                    if llm_summary and llm_summary.strip():
+                        output_header += f"\n\n✨ {llm_summary.strip()}"
+                
+                # Return clean output: Header + Fixed code
+                return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
+            else:
+                # No fixes applied
+                return "No specific improvements needed. Code follows GDScript best practices.\n\n```gdscript\n" + fixed_code + "\n```"
             
         except Exception as e:
             print(f"[DEBUG] GodotFixer/Explainer failed: {e}, falling back to LLM engine")
