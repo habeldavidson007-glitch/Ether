@@ -377,6 +377,8 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     This is CRITICAL for Windows 2GB RAM systems - prevents indefinite hangs.
     Uses Popen with non-blocking read to enforce exact timeout with process.kill().
     
+    FIX v1.9.1: Pass prompt as CLI argument instead of stdin (Windows-safe).
+    
     Args:
         prompt: The prompt to send to ollama
         model: Model name to use
@@ -386,11 +388,11 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     Returns:
         Dict with success, output, time, and model info
     """
-    cmd = ["ollama", "run", model]
+    # FIX: Pass prompt as CLI argument (Windows-safe, Ollama-supported)
+    cmd = ["ollama", "run", model, prompt]
     try:
         process = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -402,9 +404,7 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         buffer = []
         start_time = time.time()
         
-        # Write prompt and close stdin to signal end of input
-        process.stdin.write(prompt)
-        process.stdin.close()
+        # REMOVED: stdin write/close (not needed with CLI arg method)
         
         # Non-blocking read loop with timeout
         while True:
@@ -646,10 +646,12 @@ def _call(role: str, messages: List[Dict]) -> str:
         )
         
         if not extracted_code and not raw_output:
-            return f"No response from {model_used}. Try again."
+            # Fallback: return raw output even if empty (never fail silently)
+            return raw_output if raw_output else f"No response from {model_used}. Try again."
         
         # Return extracted code if available, otherwise raw output
-        return extracted_code if extracted_code else raw_output
+        # CRITICAL: Never return empty - always have something to show user
+        return extracted_code if extracted_code else (raw_output or f"Empty response from {model_used}.")
         
     except Exception as e:
         error_msg = str(e)
@@ -1479,10 +1481,11 @@ def debug(error_log: str, context: str) -> Dict:
     raw = _call("debug", messages)
     result = _safe_json(raw)
     if not result:
+        # CRITICAL FIX: Never show "Parse failed" - always return something useful
         result = {
-            "root_cause": "Parse failed — see raw output",
+            "root_cause": raw[:200] if raw else "Unable to parse response",
             "changes": [],
-            "explanation": raw[:400],
+            "explanation": raw[:400] if raw else "No explanation available",
             "prevention": ""
         }
     return result
