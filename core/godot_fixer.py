@@ -2,6 +2,7 @@
 Ether v1.9.8 - Godot-Specific Python Fixer
 Deterministic code repair using project context (knowledge/memory).
 LLM is used ONLY for explanations, not code generation.
+Connects to existing workspace files: /workspace/workspace/memory.json and knowledge/
 """
 
 import re
@@ -12,28 +13,95 @@ from typing import List, Dict, Tuple, Optional
 class GodotFixer:
     """
     Applies deterministic fixes to GDScript based on detected issues
-    and project-specific knowledge from knowledge.json and memory.json.
+    and project-specific knowledge from existing workspace files.
     """
     
-    def __init__(self, project_path: str, knowledge_path: str, memory_path: str):
-        self.project_path = project_path
-        self.knowledge = self._load_json(knowledge_path)
-        self.memory = self._load_json(memory_path)
+    def __init__(self, workspace_path: str = None):
+        """
+        Initialize with paths to EXISTING workspace files.
+        Default: Uses /workspace/workspace/ structure (memory.json + knowledge/)
+        """
+        if workspace_path is None:
+            # Default to existing workspace structure
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.workspace_path = os.path.join(base_dir, 'workspace')
+        else:
+            self.workspace_path = workspace_path
+            
+        # Point to ACTUAL existing files
+        self.memory_path = os.path.join(self.workspace_path, 'memory.json')
+        self.knowledge_dir = os.path.join(self.workspace_path, 'knowledge')
         
-        # Project-specific patterns from knowledge/memory
-        self.signal_prefix = self.knowledge.get("signal_prefix", "_on_")
-        self.common_vars = self.knowledge.get("common_variables", [])
+        # Load data from existing files
+        self.memory = self._load_memory()
+        self.knowledge_context = self._load_knowledge_context()
+        
+        # Project-specific patterns from memory/knowledge
+        self.signal_prefix = self.memory.get("signal_prefix", "_on_")
+        self.common_vars = self.memory.get("common_variables", [])
         self.project_style = self.memory.get("coding_style", {})
 
-    def _load_json(self, path: str) -> dict:
-        """Safely load JSON file, return empty dict if missing."""
-        if not os.path.exists(path):
+    def _load_memory(self) -> dict:
+        """Load existing memory.json file (handles both dict and list formats)."""
+        if not os.path.exists(self.memory_path):
+            print(f"[WARN] Memory file not found: {self.memory_path}")
             return {}
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
+            with open(self.memory_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Handle both dict and list formats
+                if isinstance(data, list):
+                    # Convert list to dict with metadata
+                    return {
+                        "history": data,
+                        "signal_prefix": "_on_",
+                        "common_variables": [],
+                        "coding_style": {}
+                    }
+                elif isinstance(data, dict):
+                    return data
+                else:
+                    return {}
+        except Exception as e:
+            print(f"[ERROR] Failed to load memory.json: {e}")
             return {}
+
+    def _load_knowledge_context(self) -> dict:
+        """
+        Load relevant context from knowledge/ directory (markdown files).
+        Extracts key GDScript patterns from existing documentation.
+        """
+        context = {
+            "best_practices": [],
+            "common_patterns": []
+        }
+        
+        if not os.path.exists(self.knowledge_dir):
+            print(f"[WARN] Knowledge directory not found: {self.knowledge_dir}")
+            return context
+        
+        # Read key GDScript documentation files
+        gdscript_files = [
+            "GDScript.md",
+            "GDScript style guide.md",
+            "GDScript reference.md"
+        ]
+        
+        for filename in gdscript_files:
+            filepath = os.path.join(self.knowledge_dir, filename)
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        # Extract simple patterns (extends, signals, etc.)
+                        if "extends" in content:
+                            context["common_patterns"].append("Use 'extends' at file start")
+                        if "signal" in content.lower():
+                            context["common_patterns"].append("Follow signal naming conventions")
+                except:
+                    pass
+        
+        return context
 
     def apply_fixes(self, code: str, issues: List[str]) -> Tuple[str, List[str]]:
         """
@@ -172,10 +240,11 @@ class GodotFixer:
         explanation += "\nCode follows GDScript best practices."
         return explanation
 
-def optimize_gdscript(file_path: str, project_path: str, knowledge_path: str, memory_path: str) -> str:
+def optimize_gdscript(file_path: str, workspace_path: str = None) -> str:
     """
     Standalone helper function to optimize a GDScript file.
     Used by builder.py handle_optimize.
+    Uses existing workspace files (memory.json + knowledge/).
     """
     # Read original code
     try:
@@ -184,8 +253,8 @@ def optimize_gdscript(file_path: str, project_path: str, knowledge_path: str, me
     except Exception as e:
         return f"Error reading file: {str(e)}"
     
-    # Initialize fixer
-    fixer = GodotFixer(project_path, knowledge_path, memory_path)
+    # Initialize fixer with existing workspace
+    fixer = GodotFixer(workspace_path)
     
     # Run lightweight analysis (imported from builder or duplicated here)
     # Duplicating minimal analyzer for standalone use

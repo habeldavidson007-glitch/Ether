@@ -2034,47 +2034,28 @@ Write fixed code now:"""
         issues = lightweight_analyzer(code)
         print(f"[DEBUG] Detected issues: {issues}")
 
-        # STEP 3: Godot-Specific Python Fixer (deterministic, uses knowledge/memory)
+        # STEP 3: Godot-Specific Python Fixer (deterministic, uses existing workspace files)
         try:
             from .godot_fixer import GodotFixer
             
-            # Get paths to knowledge and memory (handle both /workspace and user project structures)
+            # Get path to existing workspace structure
             base_dir = Path(__file__).parent.parent
+            workspace_path = base_dir / "workspace"
             
-            # Try multiple possible locations for knowledge/memory
-            possible_knowledge_paths = [
-                base_dir / "knowledge" / "knowledge.json",
-                Path("/workspace/knowledge/knowledge.json"),
-                Path.cwd() / "knowledge" / "knowledge.json"
-            ]
-            possible_memory_paths = [
-                base_dir / "memory" / "memory.json",
-                Path("/workspace/memory/memory.json"),
-                Path.cwd() / "memory" / "memory.json"
-            ]
+            # Verify workspace exists with required files
+            if not workspace_path.exists():
+                raise FileNotFoundError(f"Workspace not found: {workspace_path}")
             
-            knowledge_path = None
-            memory_path = None
+            memory_path = workspace_path / "memory.json"
+            knowledge_dir = workspace_path / "knowledge"
             
-            for p in possible_knowledge_paths:
-                if p.exists():
-                    knowledge_path = str(p)
-                    break
+            if not memory_path.exists():
+                print(f"[WARN] Memory file not found: {memory_path}, using defaults")
+            if not knowledge_dir.exists():
+                print(f"[WARN] Knowledge directory not found: {knowledge_dir}, using defaults")
             
-            for p in possible_memory_paths:
-                if p.exists():
-                    memory_path = str(p)
-                    break
-            
-            # Fallback to empty dicts if files don't exist
-            if not knowledge_path:
-                knowledge_path = str(base_dir / "knowledge" / "knowledge.json")
-            if not memory_path:
-                memory_path = str(base_dir / "memory" / "memory.json")
-            
-            project_path = getattr(self.project_loader, 'project_path', str(base_dir))
-            
-            fixer = GodotFixer(str(project_path), str(knowledge_path), str(memory_path))
+            # Initialize fixer with existing workspace (no separate knowledge.json needed)
+            fixer = GodotFixer(str(workspace_path))
             fixed_code, applied_fixes = fixer.apply_fixes(code, issues)
             explanation = fixer.generate_explanation(code, fixed_code, applied_fixes)
             
