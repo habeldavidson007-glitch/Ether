@@ -379,16 +379,17 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 
 def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
     """
-    Windows-safe subprocess wrapper using direct stdin pipe (NO shell/temp file).
-    Guarantees partial output capture even if killed at timeout.
+    Production-safe Ollama execution (Windows compatible).
+    No streaming. No deadlocks. Hard timeout enforced.
+    Uses communicate() for stable pipe handling.
     
-    FIX v1.9.6: Removed fragile shell piping (type file | ollama) that failed on Windows paths with spaces.
-    Now uses direct stdin for reliable execution with manual streaming for partial capture.
+    FIX v1.9.7: Replaced manual stdin write + streaming with communicate() to eliminate deadlock.
+    This guarantees reliable execution on Windows without pipe synchronization issues.
     """
     start_time = time.time()
     
     try:
-        # 1. Start process with direct stdin pipe (NO shell=True, NO temp files)
+        # 1. Start process with direct pipes (NO shell=True)
         process = subprocess.Popen(
             ["ollama", "run", model],
             stdin=subprocess.PIPE,
@@ -396,94 +397,54 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            errors="ignore",
-            bufsize=1
+            errors="ignore"
         )
         
-        buffer = []
-        total_chars = 0
-        timed_out = False
-        
-        # 2. Write prompt to stdin and close it immediately
+        # 2. Use communicate() for safe atomic I/O (prevents deadlock)
         try:
-            process.stdin.write(prompt)
-            process.stdin.close()
-        except:
-            pass
-        
-        # 3. Manual Streaming Loop - captures output BEFORE kill
-        while True:
-            elapsed = time.time() - start_time
+            stdout, stderr = process.communicate(
+                input=prompt,
+                timeout=timeout
+            )
             
-            # Check timeout
-            if elapsed > timeout:
-                timed_out = True
-                break
+            # Success path - got output before timeout
+            output = (stdout or "")[:max_chars]
+            return {
+                "success": True,
+                "timeout": False,
+                "output": output,
+                "error": None,
+                "stderr": stderr or "",
+                "time": round(time.time() - start_time, 2),
+                "model": model
+            }
             
-            # Check character limit (early stop to save RAM)
-            if total_chars > max_chars:
-                break
-            
-            # Check if process ended naturally
-            if process.poll() is not None:
-                # Drain any remaining output
-                if process.stdout:
-                    try:
-                        remaining = process.stdout.read()
-                        if remaining:
-                            buffer.append(remaining)
-                    except:
-                        pass
-                break
-            
-            # Read line from stdout
-            if process.stdout:
-                try:
-                    line = process.stdout.readline()
-                    if line:
-                        buffer.append(line)
-                        total_chars += len(line)
-                    else:
-                        # No output yet, brief sleep to prevent CPU spin
-                        time.sleep(0.05)
-                except:
-                    break
-            else:
-                break
-        
-        # 4. HARD KILL
-        try:
+        except subprocess.TimeoutExpired:
+            # Timeout path - kill and collect partial output
             process.kill()
-            process.wait(timeout=2)
-        except:
-            pass
-        
-        # 5. Read stderr (non-blocking)
-        stderr_output = ""
-        if process.stderr:
             try:
-                stderr_output = process.stderr.read()
+                stdout, stderr = process.communicate(timeout=2)
             except:
-                pass
-        
-        # 6. Compile result
-        output = "".join(buffer).strip()
-        elapsed_rounded = round(time.time() - start_time, 2)
-        
-        return {
-            "success": True if output else False,
-            "output": output,
-            "stderr": stderr_output,
-            "time": elapsed_rounded,
-            "model": model,
-            "timed_out": timed_out
-        }
-
+                stdout, stderr = "", ""
+                
+            output = (stdout or "")[:max_chars]
+            return {
+                "success": False,
+                "timeout": True,
+                "output": output,
+                "error": "Timeout exceeded",
+                "stderr": stderr or "",
+                "time": round(time.time() - start_time, 2),
+                "model": model
+            }
+            
     except Exception as e:
         return {
             "success": False,
+            "timeout": False,
             "output": "",
             "error": str(e),
+            "stderr": "",
             "time": round(time.time() - start_time, 2),
             "model": model
         }
@@ -531,62 +492,46 @@ def _extract_code_safe(text: str) -> str:
 
 def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, timeout: int = 60) -> Tuple[str, str, str, float]:
     """
-    Call LLM with retry downgrade logic.
-    
-    If primary model produces EMPTY output (not just short),
-    retry with simplified prompt and fallback model.
-    
-    Args:
-        prompt: Original user prompt
-        primary_model: Primary model to try first
-        fallback_model: Fallback model for retry
-        timeout: Timeout for primary call (fallback uses 40s)
-    
-    Returns:
-        Tuple of (raw_output, extracted_code, model_used, time_taken)
+    Production-grade LLM caller with retry logic.
+    Only retries if output is TRULY EMPTY, not just short.
+    Returns: (raw_output, extracted_code, model_used, time_taken)
     """
-    # DEBUG: Log prompt size
-    print(f"\n[DEBUG] Prompt length: {len(prompt)} chars")
-    
-    # First attempt with primary model
+    # Try primary model
     result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
+    
     raw_output = result.get("output", "")
-    stderr_output = result.get("stderr", "")
-    extracted = _extract_code_safe(raw_output)
-    time_taken = result.get("time", 0)
+    extracted_code = _extract_code_safe(raw_output)
     
-    # DEBUG: Log what we got
-    print(f"[DEBUG] Raw output length: {len(raw_output)} chars")
-    print(f"[DEBUG] Extracted code length: {len(extracted)} chars")
-    print(f"[DEBUG] Stderr: {stderr_output[:200] if stderr_output else 'None'}")
-    print(f"[DEBUG] Exit success: {result.get('success', False)}")
+    # Debug logging
+    print(f"[DEBUG] Model: {primary_model}")
+    print(f"[DEBUG] Raw length: {len(raw_output)}")
+    print(f"[DEBUG] Extracted length: {len(extracted_code)}")
+    print(f"[DEBUG] Stderr: {result.get('stderr', '')[:200]}")
+    print(f"[DEBUG] Success: {result.get('success', False)}")
     
-    # CRITICAL FIX: Only retry if output is TRULY EMPTY, not just short
-    # Accept ANY non-empty output from small models (even 1-2 lines)
-    if not extracted.strip() and fallback_model != primary_model:
-        print(f"[DEBUG] Primary output empty, trying fallback with simplified prompt...")
-        # Retry with SIMPLIFIED prompt - remove all structure, just code request
-        simplified_prompt = f"""Return ONLY GDScript code. No explanations. Max 15 lines.
-
-{prompt[:300]}"""
-        fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
-        fallback_raw = fallback_result.get("output", "")
-        fallback_stderr = fallback_result.get("stderr", "")
-        fallback_extracted = _extract_code_safe(fallback_raw)
-        
-        print(f"[DEBUG] Fallback raw output length: {len(fallback_raw)} chars")
-        print(f"[DEBUG] Fallback extracted length: {len(fallback_extracted)} chars")
-        print(f"[DEBUG] Fallback stderr: {fallback_stderr[:200] if fallback_stderr else 'None'}")
-        
-        # Use fallback result
-        return (
-            fallback_raw,
-            fallback_extracted,
-            fallback_model,
-            fallback_result.get("time", 0)
-        )
+    # ✅ Accept ANY non-empty output (don't reject short responses)
+    if extracted_code.strip():
+        return (raw_output, extracted_code, primary_model, result.get("time", 0))
     
-    return (raw_output, extracted, primary_model, time_taken)
+    # 🔁 Fallback ONLY if truly empty
+    print("[DEBUG] Primary empty → trying fallback with simplified prompt")
+    
+    simplified_prompt = "Return ONLY GDScript code. Max 15 lines. No explanations.\n\n" + prompt[:300]
+    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
+    
+    fallback_raw = fallback_result.get("output", "")
+    fallback_extracted = _extract_code_safe(fallback_raw)
+    
+    print(f"[DEBUG] Fallback raw length: {len(fallback_raw)}")
+    print(f"[DEBUG] Fallback stderr: {fallback_result.get('stderr', '')[:200]}")
+    
+    # Use fallback if it produced something
+    if fallback_extracted.strip():
+        return (fallback_raw, fallback_extracted, fallback_model, fallback_result.get("time", 0))
+    
+    # 🚫 Never return empty - use raw output as last resort
+    final_output = raw_output or fallback_raw or "Model returned no usable output."
+    return (final_output, _extract_code_safe(final_output), fallback_model, fallback_result.get("time", 0))
 
 
 # ── Ollama Call — Role-Aware with HARD TIMEOUT ENFORCEMENT ─────────────────────
