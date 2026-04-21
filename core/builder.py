@@ -416,7 +416,7 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 # Replaces blocking HTTP calls with subprocess.Popen for hard kill capability
 
 
-def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000, temperature: float = 0.7, top_p: float = 0.9) -> Dict[str, Any]:
+def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
     """
     Production-safe Ollama execution (Windows compatible).
     No streaming. No deadlocks. Hard timeout enforced.
@@ -425,15 +425,12 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     FIX v1.9.7: Replaced manual stdin write + streaming with communicate() to eliminate deadlock.
     This guarantees reliable execution on Windows without pipe synchronization issues.
     
-    v1.9.8 OPTIMIZATION: Added temperature and top_p parameters to improve small model output quality.
-    Default values (0.7, 0.9) encourage creativity while maintaining coherence for 1.5B-3B models.
-    
-    NOTE: Temperature/top_p are passed via JSON options in the prompt, not CLI flags.
+    NOTE: Temperature/top_p are NOT passed via CLI - Ollama uses model defaults.
+    For custom parameters, use Ollama API or create Modelfile (not implemented for simplicity).
     """
     start_time = time.time()
     
-    # Build command - Ollama run doesn't support --temperature flags directly
-    # We'll use the default settings or pass options via environment/modelfile if needed
+    # Build command - Ollama run uses model defaults, no CLI parameters supported
     cmd = [
         "ollama", 
         "run", 
@@ -564,8 +561,8 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     v1.9.8 OPTIMIZATION: extract_mode parameter controls code extraction strictness.
     Use "optimize" mode for code generation tasks to accept any non-empty output.
     """
-    # Try primary model with optimized temperature for small models
-    result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout, temperature=0.7, top_p=0.9)
+    # Try primary model with default temperature settings
+    result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
     
     raw_output = result.get("output", "")
     extracted_code = _extract_code_safe(raw_output, mode=extract_mode)
@@ -587,7 +584,7 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     # v1.9.8 FIX: Even simpler fallback prompt for 1.5B models
     simplified_prompt = f"Code:{prompt[:200]}\nOutput:"
     fallback_timeout = max(20, timeout - 10)  # Shorter timeout for fallback
-    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout, temperature=0.8, top_p=0.95)
+    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout)
     
     fallback_raw = fallback_result.get("output", "")
     fallback_extracted = _extract_code_safe(fallback_raw, mode=extract_mode)
