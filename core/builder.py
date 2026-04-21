@@ -41,10 +41,11 @@ MAX_CONTEXT_ANALYZE = 250    # Slightly more for analysis (max safe limit)
 MAX_CONTEXT_BUILD = 150      # Minimal context for generation
 
 TIMEOUT = {
-    "generate": 35,   # Strict timeout to force fallback quickly
-    "debug":    35,
+    "generate": 60,   # File-specific tasks need more time
+    "debug":    60,
     "explain":  30,
     "chat":     25,
+    "analyze":  75,   # Project-wide analysis needs maximum time
 }
 
 MAX_TOKENS = {
@@ -52,6 +53,7 @@ MAX_TOKENS = {
     "debug":    150,
     "explain":  100,
     "chat":     80,
+    "analyze":  200,  # Analysis can be slightly longer
 }
 
 # Cache settings from v1.8
@@ -1034,7 +1036,7 @@ def analyze(task: str, context: str, history: List[Dict], chat_mode: str = "mixe
     else:
         messages.append({"role": "user", "content": task})
     
-    return _call("explain", messages)
+    return _call("analyze", messages)
 
 
 def chat(message: str, history: List[Dict], context: str, chat_mode: str = "mixed") -> str:
@@ -1210,7 +1212,9 @@ class EtherBrain:
             if memory_context:
                 context = memory_context + "\n\n" + context
             
-            # Run appropriate pipeline
+            # Run appropriate pipeline with PIPELINE REORDERING (v1.9 FIX)
+            # KEY: File-specific tasks use scoped_loader, NOT global analyzer
+            
             if complex_intent == 'analyze':
                 step("🔍 Analyzing project...")
                 try:
@@ -1237,26 +1241,40 @@ class EtherBrain:
                 except Exception as e:
                     return {"type": "chat", "text": f"❌ Analysis error: {str(e)}"}, log
             
-            elif complex_intent == 'debug':
-                step("🔧 Debugging...")
-                try:
-                    result = debug(query, context)
-                    return {"type": "debug", **result}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
-            
-            elif complex_intent == 'build':
-                step("🏗 Building...")
-                try:
-                    thought = think(query, context)
-                    step("Thinking...")
-                    blueprint = plan(query, thought, context)
-                    step("Planning...")
-                    result = build(query, thought, blueprint, context)
-                    step("Building...")
-                    return {"type": "build", "thought": thought, **result}, log
-                except Exception as e:
-                    return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+            elif complex_intent in ('generate', 'build', 'debug'):
+                # FILE-SPECIFIC PIPELINE: Use scoped_loader (NO global analyzer)
+                # This is the CRITICAL FIX - prevents timeout on single-file tasks
+                target_file = self._extract_target_file(query)
+                
+                if target_file and self.project_loader:
+                    step(f"📁 Targeting file: {target_file}")
+                    # Use scoped loader for focused context (depth=1, max 3 files)
+                    context = self.project_loader.build_lightweight_context(query, max_chars=MAX_CONTEXT_BUILD)
+                    step("⚡ Scoped context loaded (no global scan)")
+                
+                if complex_intent == 'debug':
+                    step("🔧 Debugging...")
+                    try:
+                        result = debug(query, context)
+                        return {"type": "debug", **result}, log
+                    except Exception as e:
+                        return {"type": "chat", "text": f"❌ Debug error: {str(e)}"}, log
+                
+                elif complex_intent == 'build':
+                    step("🏗 Building...")
+                    try:
+                        result = build(query, context)
+                        return {"type": "build", **result}, log
+                    except Exception as e:
+                        return {"type": "chat", "text": f"❌ Build error: {str(e)}"}, log
+                
+                else:  # generate
+                    step("✨ Generating optimization...")
+                    try:
+                        result = debug(query, context)  # Reuse debug pipeline for generate
+                        return {"type": "debug", **result}, log
+                    except Exception as e:
+                        return {"type": "chat", "text": f"❌ Generation error: {str(e)}"}, log
             
             else:
                 # Default to chat - don't pass heavy context for casual chat
@@ -1270,25 +1288,47 @@ class EtherBrain:
                 except Exception as e:
                     return {"type": "chat", "text": f"❌ Error: {str(e)}"}, log
     
+    def _extract_target_file(self, query: str) -> str:
+        """
+        Extract target .gd filename from query if present.
+        Returns filename or None.
+        """
+        import re
+        match = re.search(r'(\w+\.gd)', query.lower())
+        return match.group(1) if match else None
+    
     def _classify_complex_intent(self, query: str) -> str:
         """
         Classify complex intents (after fast path filtering).
-        Returns: analyze, debug, build, or chat
+        Returns: analyze, debug, build, generate, or chat
+        
+        KEY FIX: File-specific requests (e.g., "optimize game.gd") are routed to GENERATE,
+        not ANALYZE. This prevents global scans for single-file tasks.
         """
         query_lower = query.lower()
         
-        # Debug keywords
+        # CRITICAL: Check if query targets a specific file
+        has_target_file = self._extract_target_file(query) is not None
+        
+        # Debug keywords (always debug mode)
         if any(k in query_lower for k in ["fix", "bug", "error", "debug", "crash", "broken", "fail", "exception"]):
             return "debug"
         
-        # Build keywords
+        # Build keywords (creating new code)
         if any(k in query_lower for k in ["create", "make", "implement", "generate", "write", "add", "build", "new"]):
             return "build"
         
-        # Analyze keywords - be more specific to avoid catching casual questions
+        # OPTIMIZE/REFACTOR with target file = GENERATE (modification request)
+        if has_target_file and any(k in query_lower for k in ["optimize", "improve", "refactor", "clean", "simplify"]):
+            return "generate"
+        
+        # Analyze keywords - ONLY for project-wide or non-file-specific requests
         if any(k in query_lower for k in ["analyze", "list", "find", "show", "review", "check", 
                                            "issues", "problems", "describe", "what do you think", 
                                            "how is my", "rate my", "feedback on"]):
+            # If targeting a specific file, treat as generate (local modification)
+            if has_target_file:
+                return "generate"
             return "analyze"
         
         # Default to chat for general questions
