@@ -1982,7 +1982,8 @@ Output code only:"""
         if not self.project_loader:
             return "No project loaded."
         
-        code = self.project_loader.load_file(file_path)
+        # Use get_content instead of load_file
+        code = self.project_loader.get_content(file_path)
         if not code:
             return "Could not load file."
         
