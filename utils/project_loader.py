@@ -359,77 +359,223 @@ class LazyProjectLoader:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in scored[:max_files]]
     
-    def build_lightweight_context(self, query: str, max_chars: int = 400) -> str:
+    # ── SCOPED LOADER (Query-Bounded Code Retrieval) ────────────────────────────
+    # Production-safe logic for 2GB RAM systems
+    # Implements: Targeted Dependency Traversal (Depth=1, Max 3 Files)
+    
+    MAX_SCOPED_FILES = 3
+    MAX_FILE_SIZE_CHARS = 50_000  # Safety cap per file
+    
+    def _read_safe(self, path: str) -> Optional[str]:
         """
-        SMART CONTEXT BUILDER for 2GB RAM systems.
-        Loads the most relevant file(s) with intelligent chunking.
-        
-        Strategy:
-        1. Find top 2 relevant files (not just 1)
-        2. Extract keyword-rich lines from each (not just first N chars)
-        3. Return structured context with file names and key functions
-        
-        This gives better results than blind truncation while staying fast.
+        Safe file reader with hard size cap.
+        Returns content or None on error.
         """
-        # Find top 2 relevant files using keyword matching
-        relevant_paths = self.find_relevant_files(query, max_files=2)
+        content = self.get_content(path)
+        if not content:
+            return None
+        # Hard cap to prevent memory spikes
+        return content[:self.MAX_FILE_SIZE_CHARS]
+    
+    def _extract_dependencies(self, content: str) -> List[str]:
+        """
+        Extract shallow dependencies using fast regex.
+        Returns list of dependency paths (max 5).
+        
+        Detects:
+        - preload("res://something.gd")
+        - load("res://something.gd")
+        - extends "res://something.gd"
+        - Class type hints (e.g., var enemy: Enemy → enemy.gd)
+        """
+        deps = set()
+        
+        # 1. preload("res://something.gd")
+        preload_matches = re.findall(r'preload\(["\']res://(.+?\.gd)["\']\)', content)
+        deps.update(preload_matches)
+        
+        # 2. load("res://something.gd")
+        load_matches = re.findall(r'load\(["\']res://(.+?\.gd)["\']\)', content)
+        deps.update(load_matches)
+        
+        # 3. extends "res://something.gd"
+        extends_matches = re.findall(r'extends\s+["\']res://(.+?\.gd)["\']', content)
+        deps.update(extends_matches)
+        
+        # 4. Class type hints (soft guess)
+        # e.g: var enemy: Enemy → enemy.gd
+        class_refs = re.findall(r':\s*([A-Z][A-Za-z0-9_]+)', content)
+        for c in class_refs:
+            deps.add(f"{c.lower()}.gd")
+        
+        # HARD LIMIT: max 5 dependencies to scan
+        return list(deps)[:5]
+    
+    def _resolve_dependency(self, dep: str) -> Optional[str]:
+        """
+        Resolve a dependency path to an actual file in the project.
+        Returns the indexed path or None if not found.
+        """
+        dep = dep.replace("\\", "/")
+        
+        # Try direct match first
+        for path in self.file_index.keys():
+            if path.endswith(dep):
+                return path
+        
+        # Fallback: match by filename only
+        dep_name = Path(dep).name
+        for path in self.file_index.keys():
+            if Path(path).name == dep_name:
+                return path
+        
+        return None
+    
+    def _build_scoped_context(self, loaded_files: Dict[str, str], max_chars: int = 300) -> str:
+        """
+        Build context from loaded files with HARD CAP.
+        Each file gets a small snippet (200 chars max).
+        Total context never exceeds max_chars.
+        """
+        ctx = []
+        total = 0
+        
+        for name, content in loaded_files.items():
+            # Very important: truncate each file snippet
+            snippet = content[:200].replace('\n', ' ')[:150]  # Single line snippet
+            chunk = f"[{name}] {snippet}"
+            
+            if total + len(chunk) > max_chars:
+                break
+            
+            ctx.append(chunk)
+            total += len(chunk) + 2
+        
+        return "\n\n".join(ctx)[:max_chars]
+    
+    def load_scoped(self, target_file: str, depth: int = 1) -> Dict[str, Any]:
+        """
+        SCOPED LOADER - Load target file + shallow dependencies only.
+        
+        This is the core function for 2GB RAM stability.
+        
+        Args:
+            target_file: Filename to analyze (e.g., "game.gd")
+            depth: Dependency depth (always 1 for safety)
+        
+        Returns:
+            Dict with either:
+            - {"success": True, "files": {path: content}, "context": str}
+            - {"success": False, "error": str}
+        
+        Guarantees:
+        - Max 3 files loaded
+        - No recursion
+        - Context ≤ 300 chars
+        - Deterministic behavior
+        """
+        loaded: Dict[str, str] = {}
+        visited: set = set()
+        
+        # STEP 1: Resolve target path
+        target_path = None
+        for path in self.file_index.keys():
+            if Path(path).name.lower() == target_file.lower():
+                target_path = path
+                break
+        
+        if not target_path:
+            return {"success": False, "error": f"'{target_file}' not found in project"}
+        
+        # STEP 2: Load target file (PASS 1)
+        content = self._read_safe(target_path)
+        if not content:
+            return {"success": False, "error": f"Failed to read {target_file}"}
+        
+        loaded[target_path] = content
+        visited.add(target_path)
+        
+        # STEP 3: Extract shallow dependencies (PASS 2, Depth=1 ONLY)
+        if depth >= 1:
+            deps = self._extract_dependencies(content)
+            
+            for dep in deps:
+                # Hard limit: stop at 3 files total
+                if len(loaded) >= self.MAX_SCOPED_FILES:
+                    break
+                
+                # Resolve dependency to actual path
+                dep_path = self._resolve_dependency(dep)
+                
+                if not dep_path:
+                    continue
+                
+                # Skip if already loaded
+                if dep_path in visited:
+                    continue
+                
+                # Load dependency
+                dep_content = self._read_safe(dep_path)
+                if not dep_content:
+                    continue
+                
+                loaded[dep_path] = dep_content
+                visited.add(dep_path)
+        
+        # STEP 4: Build ultra-compact context
+        context = self._build_scoped_context(loaded)
+        
+        return {
+            "success": True,
+            "files": loaded,
+            "context": context,
+            "file_count": len(loaded),
+            "paths": list(loaded.keys())
+        }
+    
+    def build_lightweight_context(self, query: str, max_chars: int = 300) -> str:
+        """
+        SMART CONTEXT BUILDER v2.0 — Scoped Loader Integration
+        
+        NEW BEHAVIOR (fixes timeout issues):
+        1. Detect target file from query FIRST
+        2. Use scoped_loader to load ONLY target + 1-2 dependencies
+        3. NEVER scan multiple files blindly
+        4. Hard limit: 3 files max, 300 chars context
+        
+        This prevents the "42 files → context explosion → timeout" problem.
+        """
+        # STEP 1: Extract target file from query
+        # Look for patterns like "game.gd", "player.gd", etc.
+        target_match = re.search(r'\b([\w_-]+\.gd)\b', query, re.IGNORECASE)
+        
+        if target_match:
+            # User specified a file → use scoped loader
+            target_file = target_match.group(1)
+            result = self.load_scoped(target_file, depth=1)
+            
+            if result["success"]:
+                return result["context"]
+            else:
+                # Fallback to old method if file not found
+                pass
+        
+        # STEP 2: No specific file mentioned → find most relevant file
+        relevant_paths = self.find_relevant_files(query, max_files=1)
         
         if not relevant_paths:
             return ""
         
-        chunks = []
-        total_chars = 0
+        # Load single file with scoped approach
+        target_path = relevant_paths[0]
+        content = self._read_safe(target_path)
         
-        for path in relevant_paths:
-            content = self.get_content(path)
-            if not content:
-                continue
-            
-            # Smart extraction: find lines related to query keywords
-            query_words = [w.lower() for w in query.split() if len(w) > 3]
-            lines = content.splitlines()
-            scored_lines = []
-            
-            for i, line in enumerate(lines):
-                score = sum(1 for word in query_words if word in line.lower())
-                if score > 0:
-                    scored_lines.append((score, i, line))
-            
-            # If no matching lines, take function definitions + first few lines
-            if not scored_lines:
-                # Look for func definitions
-                func_lines = [(2, i, line) for i, line in enumerate(lines) if line.strip().startswith('func ')]
-                # Add extends line if exists
-                extends_line = [(3, 0, lines[0])] if lines and lines[0].strip().startswith('extends') else []
-                scored_lines = func_lines[:5] + extends_line
-            
-            # Sort by score and take top lines
-            scored_lines.sort(key=lambda x: (-x[0], x[1]))
-            selected = scored_lines[:8]  # Take up to 8 relevant lines per file
-            
-            # Build formatted chunk
-            if selected:
-                chunk_lines = [f"\n--- {path} ---"]
-                chunk_chars = len(chunk_lines[0])
-                
-                for _, line_idx, line_text in sorted(selected, key=lambda x: x[1]):
-                    if chunk_chars + len(line_text) + 1 < max_chars // 2:  # Half budget per file
-                        chunk_lines.append(line_text)
-                        chunk_chars += len(line_text) + 1
-                
-                if len(chunk_lines) > 1:
-                    chunks.append("\n".join(chunk_lines))
-                    total_chars += chunk_chars
-        
-        if not chunks:
-            # Fallback: return first N chars of most relevant file
-            path = relevant_paths[0]
-            content = self.get_content(path)
-            if content:
-                return f"Code[{path}]: {content[:max_chars]}..."
+        if not content:
             return ""
         
-        return "\n".join(chunks)
+        # Build minimal context from single file
+        loaded = {target_path: content}
+        return self._build_scoped_context(loaded, max_chars=max_chars)
     
     def unload_all(self) -> None:
         """Clear all loaded content to free memory."""
