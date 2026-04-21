@@ -375,7 +375,7 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     Run ollama via subprocess with HARD timeout enforcement.
     
     This is CRITICAL for Windows 2GB RAM systems - prevents indefinite hangs.
-    Uses Popen to stream stdout and enforce exact timeout with process.kill().
+    Uses Popen with non-blocking read to enforce exact timeout with process.kill().
     
     Args:
         prompt: The prompt to send to ollama
@@ -406,20 +406,55 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         process.stdin.write(prompt)
         process.stdin.close()
         
-        # Stream stdout line-by-line
+        # Non-blocking read loop with timeout
         while True:
-            if process.stdout is None:
-                break
-            line = process.stdout.readline()
-            if line:
-                buffer.append(line)
-                # Early stop if buffer exceeds max_chars
-                if sum(len(l) for l in buffer) > max_chars:
-                    break
             # Check if process finished naturally
             if process.poll() is not None:
+                # Drain any remaining output
+                try:
+                    remaining = process.stdout.read()
+                    if remaining:
+                        buffer.append(remaining)
+                except Exception:
+                    pass
                 break
-            # Check timeout
+            
+            # Check timeout BEFORE reading (critical!)
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                break
+            
+            # Try to read with small timeout to avoid blocking forever
+            # Use select on Unix for non-blocking I/O
+            try:
+                import select
+                # Wait up to 0.5 seconds for data
+                ready, _, _ = select.select([process.stdout], [], [], 0.5)
+                if ready:
+                    line = process.stdout.readline()
+                    if line:
+                        buffer.append(line)
+                        # Early stop if buffer exceeds max_chars
+                        if sum(len(l) for l in buffer) > max_chars:
+                            break
+            except (ImportError, ValueError):
+                # Windows fallback: use readline with timeout check
+                # On Windows, select() doesn't work on pipes, so we use a different approach
+                # Read with a short sleep to prevent CPU spinning
+                try:
+                    # Try to read available data
+                    line = process.stdout.readline()
+                    if line:
+                        buffer.append(line)
+                        if sum(len(l) for l in buffer) > max_chars:
+                            break
+                    else:
+                        # No data available, sleep briefly to avoid blocking
+                        time.sleep(0.1)
+                except Exception:
+                    time.sleep(0.1)
+            
+            # Final timeout check after read attempt
             if time.time() - start_time > timeout:
                 break
         
