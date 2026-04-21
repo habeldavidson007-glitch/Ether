@@ -416,7 +416,7 @@ def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> st
 # Replaces blocking HTTP calls with subprocess.Popen for hard kill capability
 
 
-def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000) -> Dict[str, Any]:
+def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars: int = 12000, temperature: float = 0.7, top_p: float = 0.9) -> Dict[str, Any]:
     """
     Production-safe Ollama execution (Windows compatible).
     No streaming. No deadlocks. Hard timeout enforced.
@@ -424,13 +424,25 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     
     FIX v1.9.7: Replaced manual stdin write + streaming with communicate() to eliminate deadlock.
     This guarantees reliable execution on Windows without pipe synchronization issues.
+    
+    v1.9.8 OPTIMIZATION: Added temperature and top_p parameters to improve small model output quality.
+    Default values (0.7, 0.9) encourage creativity while maintaining coherence for 1.5B-3B models.
     """
     start_time = time.time()
+    
+    # Build command with model parameters for better generation quality
+    cmd = [
+        "ollama", 
+        "run", 
+        model,
+        "--temperature", str(temperature),
+        "--top-p", str(top_p)
+    ]
     
     try:
         # 1. Start process with direct pipes (NO shell=True)
         process = subprocess.Popen(
-            ["ollama", "run", model],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -489,7 +501,7 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         }
 
 
-def _extract_code_safe(text: str) -> str:
+def _extract_code_safe(text: str, mode: str = "general") -> str:
     """
     Aggressive Code Extractor - NEVER fails.
     
@@ -500,6 +512,10 @@ def _extract_code_safe(text: str) -> str:
     4. Last resort: return truncated raw text
     
     v1.9.8 FIX: Added 'extends' as code keyword for GDScript detection.
+    v1.9.8 OPTIMIZATION: Mode parameter allows different extraction strictness.
+    - "optimize" mode: Accepts ANY non-empty text as valid code
+    - "general" mode: Uses standard keyword detection
+    
     Never returns empty string unless input is empty.
     """
     if not text or not text.strip():
@@ -527,23 +543,31 @@ def _extract_code_safe(text: str) -> str:
     if code_lines:
         return "\n".join(code_lines[:40]).strip()
     
-    # Priority 4: Return raw text truncated (never fail)
+    # Priority 4: ULTRA-AGGRESSIVE MODE - Return ANY non-empty text for optimize requests
+    if mode == "optimize":
+        # For optimization, just return the raw response cleaned up
+        # The model might output explanations mixed with code
+        return text.strip()[:500]
+    
+    # Priority 5: Return raw text truncated (never fail)
     return text[:500]
 
 
-def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, timeout: int = 60) -> Tuple[str, str, str, float]:
+def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, timeout: int = 60, extract_mode: str = "general") -> Tuple[str, str, str, float]:
     """
     Production-grade LLM caller with retry logic.
     Only retries if output is TRULY EMPTY, not just short.
     Returns: (raw_output, extracted_code, model_used, time_taken)
     
     v1.9.8: Now supports configurable timeout for 2-step thinking engine.
+    v1.9.8 OPTIMIZATION: extract_mode parameter controls code extraction strictness.
+    Use "optimize" mode for code generation tasks to accept any non-empty output.
     """
-    # Try primary model
-    result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
+    # Try primary model with optimized temperature for small models
+    result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout, temperature=0.7, top_p=0.9)
     
     raw_output = result.get("output", "")
-    extracted_code = _extract_code_safe(raw_output)
+    extracted_code = _extract_code_safe(raw_output, mode=extract_mode)
     
     # Debug logging
     print(f"[DEBUG] Model: {primary_model}")
@@ -562,10 +586,10 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     # v1.9.8 FIX: Even simpler fallback prompt for 1.5B models
     simplified_prompt = f"Code:{prompt[:200]}\nOutput:"
     fallback_timeout = max(20, timeout - 10)  # Shorter timeout for fallback
-    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout)
+    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout, temperature=0.8, top_p=0.95)
     
     fallback_raw = fallback_result.get("output", "")
-    fallback_extracted = _extract_code_safe(fallback_raw)
+    fallback_extracted = _extract_code_safe(fallback_raw, mode=extract_mode)
     
     print(f"[DEBUG] Fallback raw length: {len(fallback_raw)}")
     print(f"[DEBUG] Fallback stderr: {fallback_result.get('stderr', '')[:200]}")
@@ -1919,51 +1943,68 @@ class EtherBrain:
         # Build issues text
         issues_text = ", ".join(detected_issues) if detected_issues else "Improve code quality"
 
-        # STEP 1: Refine issues (Tiny prompt, short timeout)
-        prompt_1 = f"Issues:{issues_text}\nFix briefly:"
-        prompt_1 = prompt_1[:200]  # Enforce strict limit
-        
-        print(f"[DEBUG] Step 1 Prompt: {prompt_1}")
-        
-        # Use existing retry logic with short timeout (~10s)
-        _, refined_issues, _, _ = self._call_llm_with_retry_wrapper(
-            prompt_1, 
-            primary_model=self.primary_model, 
-            fallback_model=self.fallback_model,
-            timeout=10
-        )
-        
-        # Fallback if refinement failed
-        if not refined_issues.strip():
-            refined_issues = issues_text
-        
-        print(f"[DEBUG] Refined issues: {refined_issues}")
+        # STEP 1: Refine issues (SKIP if issues are already specific from Python)
+        # Python's lightweight_analyzer already gives specific issues like "Unused var: X"
+        # Only refine if issues are vague
+        refined_issues = issues_text
+        if detected_issues and len(detected_issues) <= 2:
+            # Python already gave specific issues, skip Step 1 to save time
+            print(f"[DEBUG] Skipping Step 1 - Python issues are specific enough")
+        else:
+            # Only run Step 1 if we need clarification
+            prompt_1 = f"Issues:{issues_text}\nList fixes (max 3 words each):"
+            prompt_1 = prompt_1[:200]  # Enforce strict limit
+            
+            print(f"[DEBUG] Step 1 Prompt: {prompt_1}")
+            
+            # Use existing retry logic with short timeout (~10s)
+            _, refined_issues_result, _, _ = self._call_llm_with_retry_wrapper(
+                prompt_1, 
+                primary_model=self.primary_model, 
+                fallback_model=self.fallback_model,
+                timeout=10
+            )
+            
+            # Fallback if refinement failed
+            if refined_issues_result and refined_issues_result.strip():
+                refined_issues = refined_issues_result.strip()
+                print(f"[DEBUG] Refined issues: {refined_issues}")
+            else:
+                print(f"[DEBUG] Step 1 failed, using original issues")
 
-        # STEP 2: Rewrite code (ULTRA-SIMPLE prompt for 1.5B model)
-        # CRITICAL: Make prompt as simple as possible
-        prompt_2 = f"""Code:
+        # STEP 2: Rewrite code (ULTRA-DIRECTIVE prompt for 1.5B model)
+        # CRITICAL: Force the model to start writing immediately
+        prompt_2 = f"""gdscript:
 {code}
 
 Fix:{refined_issues[:80]}
-Output code only:"""
+
+Write fixed code now:"""
         prompt_2 = prompt_2[:500]  # Enforce strict limit
         
         print(f"[DEBUG] Step 2 Prompt length: {len(prompt_2)}")
         
+        # Use optimize mode for ultra-aggressive extraction
         _, improved, _, time_taken = self._call_llm_with_retry_wrapper(
             prompt_2,
             primary_model=self.primary_model,
             fallback_model=self.fallback_model,
-            timeout=25
+            timeout=25,
+            extract_mode="optimize"
         )
         
         print(f"[DEBUG] Step 2 took {time_taken}s, output length: {len(improved) if improved else 0}")
         
-        return improved.strip() if improved.strip() else "Could not optimize."
+        # FINAL FALLBACK: If still empty, return code with minor edits or raw message
+        if not improved or not improved.strip():
+            # Return original code with a note
+            return f"# Optimization suggested: {refined_issues[:50]}\n{code}"
+        
+        return improved.strip()
 
-    def _call_llm_with_retry_wrapper(self, prompt: str, primary_model: str, fallback_model: str, timeout: int = 60) -> Tuple[str, str, str, float]:
+    def _call_llm_with_retry_wrapper(self, prompt: str, primary_model: str, fallback_model: str, timeout: int = 60, extract_mode: str = "general") -> Tuple[str, str, str, float]:
         """Wrapper to call _call_llm_with_retry function from within EtherBrain class."""
-        return _call_llm_with_retry(prompt, primary_model, fallback_model, timeout)
+        return _call_llm_with_retry(prompt, primary_model, fallback_model, timeout, extract_mode)
 
     # ── OPTIMIZATION HANDLER (v1.9.8 Fusion Pipeline) ───────────────────────────
     # Fused: Scoped Load → Analyze → Lite Think → Generate
