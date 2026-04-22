@@ -2097,18 +2097,32 @@ Write fixed code now:"""
 
     def handle_optimize(self, file_path: str, user_query: str, auto_save: bool = False) -> str:
         """
-        Fused Optimization Pipeline v1.9.9 (3-Step Hybrid Python+LLM + Auto-Save + Smart Context):
-        1. GodotFixer applies deterministic fixes (unlimited chars)
-        2. GodotExplainer compares and explains changes
-        3. LLM Summarizer with optimized prompts for small models
-        4. Auto-save to original file with backup
+        Fused Optimization Pipeline v1.9.9 (3-Step Hybrid Python+LLM + Auto-Save + Smart Context + Memory Integration):
+        1. Check memory for similar past fixes (instant learning)
+        2. GodotFixer applies deterministic fixes (unlimited chars)
+        3. GodotExplainer compares and explains changes
+        4. LLM Summarizer with optimized prompts for small models
+        5. Auto-save to original file with backup
+        6. Record fix in memory for future learning
         
         Args:
             file_path: Path to GDScript file to optimize (filename or relative path)
             user_query: User's optimization request
             auto_save: If True, write optimized code back to original file with backup
-            \n        Returns: Fixed code with explanation and LLM summary.
+            
+        Returns: Fixed code with explanation and LLM summary.
         """
+        # STEP 0: Check Memory for Similar Past Fixes (NEW - Learning from History)
+        if self.memory_core:
+            code_hash = self.memory_core._hash_code(user_query + file_path)
+            similar_fixes = self.memory_core.get_similar_fixes(file_path, code_hash)
+            recurring_issues = self.memory_core.get_recurring_issues(file_path)
+            
+            if similar_fixes:
+                print(f"[DEBUG] Memory found {len(similar_fixes)} similar past fixes")
+            if recurring_issues:
+                print(f"[DEBUG] Memory detected recurring issues: {recurring_issues}")
+        
         # STEP 1: Load Full File with Smart Context Management
         if not self.project_loader:
             return "No project loaded."
@@ -2240,17 +2254,57 @@ Write fixed code now:"""
                     self.last_optimized_code = fixed_code
                     self.last_optimized_file_path = file_path  # Track the file path
                     
+                    # STEP 6: Record Fix in Memory for Future Learning (NEW)
+                    if self.memory_core and len(applied_fixes) > 0:
+                        try:
+                            self.memory_core.record_fix(
+                                file_path=file_path,
+                                issues_fixed=applied_fixes,
+                                success=True,
+                                context={"query": user_query, "original_lines": len(code.splitlines()), "fixed_lines": len(fixed_code.splitlines())}
+                            )
+                            print(f"[DEBUG] Fix recorded in memory")
+                        except Exception as mem_error:
+                            print(f"[DEBUG] Memory recording failed: {mem_error}")
+                    
                     return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Code automatically saved to {file_path} (backup created)"
                 else:
                     # Small file, show all
                     # Store full code for /save command
                     self.last_optimized_code = fixed_code
                     self.last_optimized_file_path = file_path  # Track the file path
+                    
+                    # STEP 6: Record Fix in Memory for Future Learning (NEW)
+                    if self.memory_core and len(applied_fixes) > 0:
+                        try:
+                            self.memory_core.record_fix(
+                                file_path=file_path,
+                                issues_fixed=applied_fixes,
+                                success=True,
+                                context={"query": user_query, "original_lines": len(code.splitlines()), "fixed_lines": len(fixed_code.splitlines())}
+                            )
+                            print(f"[DEBUG] Fix recorded in memory")
+                        except Exception as mem_error:
+                            print(f"[DEBUG] Memory recording failed: {mem_error}")
+                    
                     return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
             else:
                 # No fixes applied - show small preview
                 preview_lines = fixed_code.splitlines()[:30]
                 preview_code = "\n".join(preview_lines)
+                
+                # Still record in memory that no issues were found (useful pattern)
+                if self.memory_core:
+                    try:
+                        self.memory_core.record_fix(
+                            file_path=file_path,
+                            issues_fixed=["No issues found"],
+                            success=True,
+                            context={"query": user_query}
+                        )
+                    except Exception:
+                        pass
+                
                 return f"No specific improvements needed. Code follows GDScript best practices.\n\n```gdscript\n{preview_code}\n```... (truncated)"
             
         except Exception as e:
