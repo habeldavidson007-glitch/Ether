@@ -52,6 +52,10 @@ class EtherEngine:
         
         # Scene graph analyzer (NEW - Step 3)
         self._scene_graph_analyzer = None
+        
+        # Godot Expert Engine (NEW - GDScript & TSCN Master)
+        self._godot_expert = None
+        self._semantic_scene_editor = None
     
     def _ensure_initialized(self):
         """Lazy-load core components on first use."""
@@ -95,6 +99,15 @@ class EtherEngine:
             self._scene_graph_analyzer = SceneGraphAnalyzer()
         except ImportError:
             self._scene_graph_analyzer = None
+        
+        # NEW: Godot Expert Engine for deep GDScript & TSCN intelligence
+        try:
+            from core.godot_expert import GodotExpert, SemanticSceneEditor
+            self._godot_expert = GodotExpert()
+            self._semantic_scene_editor = SemanticSceneEditor()
+        except ImportError:
+            self._godot_expert = None
+            self._semantic_scene_editor = None
         
         # NEW: Memory Core and Cascade Scanner for proactive learning
         try:
