@@ -1,6 +1,6 @@
 ---
 source: expander
-generated: 2026-04-22T17:29:15.773385
+generated: 2026-04-22T17:34:00.931181
 category: cpp_advanced
 mode: coding
 ---
