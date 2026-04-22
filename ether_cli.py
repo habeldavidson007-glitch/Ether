@@ -126,6 +126,20 @@ class EtherCLI:
         if cache_stats:
             print(f"  🗃 Cache:       {cache_stats.get('entries', 0)} entries")
         
+        # NEW: Show dependency graph stats if available
+        if hasattr(self.brain, 'dependency_graph') and self.brain.dependency_graph:
+            dep_stats = self.brain.dependency_graph.get_stats()
+            print(f"\n🔗 Dependency Graph:")
+            print(f"  🔗 Dependencies:  {dep_stats.get('total_dependencies', 0)}")
+            print(f"  ⚠ Circular Deps:  {dep_stats.get('circular_dependencies', 0)}")
+            
+            most_depended = dep_stats.get('most_depended_on', [])
+            if most_depended:
+                print(f"  📌 Most Used:")
+                for filepath, count in most_depended[:3]:
+                    filename = filepath.split('/')[-1]
+                    print(f"     • {filename} ({count} dependents)")
+        
         print()
     
     def show_help(self):

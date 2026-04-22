@@ -4,23 +4,24 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
+.Python
+*.so
+.coverage
+htmlcov/
+.coverage.*
+.pytest_cache/
+.mypy_cache/
 
 # Virtual environments
 venv/
 .venv/
 env/
+ENV/
 .ENV/
 
-# Logs
-*.log
-
-# Temporary files
-*.tmp
-*.swp
-*~
+# Build artifacts
+build/
+dist/
+*.egg
+*.egg-info/
 ```

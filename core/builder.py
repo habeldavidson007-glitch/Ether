@@ -1599,6 +1599,7 @@ class EtherBrain:
         self.history: List[Dict[str, str]] = []
         self.chat_mode = "mixed"
         self.last_optimized_code: Optional[str] = None  # Store last optimized code for /save command
+        self.dependency_graph = None  # NEW: Dependency graph for impact analysis
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -1638,6 +1639,14 @@ class EtherBrain:
             if success:
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+                
+                # NEW: Build dependency graph
+                try:
+                    from core.dependency_graph import DependencyGraph
+                    self.dependency_graph = DependencyGraph()
+                    self.dependency_graph.load_project(str(folder_path))
+                except Exception as e:
+                    pass  # Optional feature, continue if it fails
             
             return success, msg
         

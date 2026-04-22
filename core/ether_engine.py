@@ -38,6 +38,7 @@ class EtherEngine:
         self._project_loader = None
         self._rag_engine = None
         self._static_analyzer = None
+        self._dependency_graph = None  # NEW: Dependency graph engine
         
         self.project_path: Optional[str] = None
         self.project_stats: Dict[str, int] = {}
@@ -72,6 +73,12 @@ class EtherEngine:
             self._static_analyzer = StaticAnalyzer()
         except ImportError:
             self._static_analyzer = None
+            
+        try:
+            from core.dependency_graph import DependencyGraph
+            self._dependency_graph = DependencyGraph()
+        except ImportError:
+            self._dependency_graph = None
         
         self._initialized = True
     
@@ -119,6 +126,10 @@ class EtherEngine:
             # Update brain with loader
             self.brain.project_loader = self._project_loader
             self.brain.project_stats = self.project_stats
+            
+            # NEW: Build dependency graph
+            if self._dependency_graph:
+                self._dependency_graph.load_project(str(project_dir))
             
             stats = self.project_stats
             message = f"✓ Project loaded: {stats['script_count']} scripts, {stats['scene_count']} scenes"
@@ -177,6 +188,11 @@ class EtherEngine:
         
         cache_stats = self.brain.get_cache_stats() if self.brain else {}
         
+        # NEW: Add dependency graph stats
+        dep_graph_stats = {}
+        if self._dependency_graph:
+            dep_graph_stats = self._dependency_graph.get_stats()
+        
         return {
             'loaded': True,
             'project_path': self.project_path,
@@ -189,6 +205,8 @@ class EtherEngine:
             'cache_entries': cache_stats.get('entries', 0),
             'has_rag': self._rag_engine is not None,
             'has_static_analysis': self._static_analyzer is not None,
+            'has_dependency_graph': self._dependency_graph is not None,
+            'dependency_stats': dep_graph_stats,
         }
     
     def clear_history(self):
@@ -221,6 +239,45 @@ class EtherEngine:
             return True, f"✓ Code saved to: {save_path}"
         except Exception as e:
             return False, f"❌ Error saving file: {e}"
+    
+    def get_impact_analysis(self, file_path: str) -> Dict:
+        """
+        Analyze what would break if this file changes.
+        
+        Args:
+            file_path: Path to the script file to analyze
+            
+        Returns:
+            Dictionary with impact analysis results
+        """
+        self._ensure_initialized()
+        
+        if not self._dependency_graph:
+            return {'error': 'Dependency graph not available'}
+        
+        # Convert to res:// path format if needed
+        if not file_path.startswith('res://'):
+            # Try to find in graph
+            for known_file in self._dependency_graph.all_files:
+                if known_file.endswith(file_path.split('/')[-1]):
+                    file_path = known_file
+                    break
+        
+        return self._dependency_graph.get_impact_analysis(file_path)
+    
+    def detect_circular_dependencies(self) -> List[List[str]]:
+        """
+        Detect circular dependencies in the project.
+        
+        Returns:
+            List of cycles found (each cycle is a list of file paths)
+        """
+        self._ensure_initialized()
+        
+        if not self._dependency_graph:
+            return []
+        
+        return self._dependency_graph.get_circular_dependencies()
 
 
 # Convenience function for simple imports
