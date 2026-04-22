@@ -2191,7 +2191,7 @@ Write fixed code now:"""
                     self.last_optimized_code = fixed_code
                     self.last_optimized_file_path = file_path  # Track the file path
                     
-                    return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Full optimized code ready (use /save to export if needed)"
+                    return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Code automatically saved to {file_path} (backup created)"
                 else:
                     # Small file, show all
                     # Store full code for /save command
