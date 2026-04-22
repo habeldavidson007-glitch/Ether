@@ -1874,8 +1874,47 @@ class EtherBrain:
         Returns filename or None.
         """
         import re
-        match = re.search(r'(\w+\.gd)', query.lower())
+        match = re.search(r'([\w\-]+\.gd)', query.lower())
         return match.group(1) if match else None
+    
+    def _resolve_file_path(self, filename: str) -> Optional[str]:
+        """
+        Resolve a filename (e.g., 'game_data.gd') to its full relative path in the project.
+        Returns the resolved path or None if not found.
+        
+        Args:
+            filename: Simple filename or relative path
+            
+        Returns:
+            Full relative path within project, or None if not found
+        """
+        if not self.project_loader:
+            return None
+        
+        # If it's already a path with directories, try it directly
+        if '/' in filename or '\\' in filename:
+            # Normalize path separators
+            normalized = filename.replace('\\', '/')
+            if normalized in self.project_loader.file_index:
+                return normalized
+            # Try without leading slash
+            if normalized.startswith('/'):
+                normalized = normalized[1:]
+                if normalized in self.project_loader.file_index:
+                    return normalized
+        
+        # Search for exact filename match in file_index
+        filename_lower = filename.lower()
+        for path in self.project_loader.file_index.keys():
+            if path.lower().endswith(filename_lower):
+                return path
+        
+        # Also try matching just the basename
+        for path in self.project_loader.file_index.keys():
+            if Path(path).name.lower() == filename_lower:
+                return path
+        
+        return None
     
     def _classify_complex_intent(self, query: str) -> str:
         """
@@ -2045,7 +2084,7 @@ Write fixed code now:"""
         4. Auto-save to original file with backup
         
         Args:
-            file_path: Path to GDScript file to optimize
+            file_path: Path to GDScript file to optimize (filename or relative path)
             user_query: User's optimization request
             auto_save: If True, write optimized code back to original file with backup
             \n        Returns: Fixed code with explanation and LLM summary.
@@ -2053,6 +2092,11 @@ Write fixed code now:"""
         # STEP 1: Load Full File with Smart Context Management
         if not self.project_loader:
             return "No project loaded."
+        
+        # RESOLVE file_path: Convert filename to full relative path if needed
+        resolved_path = self._resolve_file_path(file_path)
+        if not resolved_path:
+            return f"Could not find file: {file_path}. Make sure the file exists in the loaded project."
         
         # Use smart context chunking for large files
         try:
@@ -2068,9 +2112,12 @@ Write fixed code now:"""
             prompt_optimizer = None
         
         # Load full code for fixer (needs complete context)
-        code = self.project_loader.get_content(file_path)
+        code = self.project_loader.get_content(resolved_path)
         if not code:
-            return "Could not load file."
+            return f"Could not load file: {resolved_path}"
+        
+        # Update file_path to resolved path for auto-save
+        file_path = resolved_path
         
         print(f"[DEBUG] Loaded full code length: {len(code)} chars ({len(code.splitlines())} lines)")
         
