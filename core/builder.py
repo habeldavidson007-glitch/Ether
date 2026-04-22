@@ -2165,14 +2165,43 @@ Write fixed code now:"""
             # STEP 4: Explain changes (simple text-based comparison)
             print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
             
+            # STEP 5: LLM Summarizer - Generate friendly summary for user (only if meaningful changes)
+            llm_summary = ""
+            # Check if there are meaningful code changes (not just whitespace/formatting/regions)
+            meaningful_keywords = ['whitespace', 'formatting', 'region']
+            has_meaningful_changes = len(applied_fixes) > 0 and not all(
+                any(kw in fix.lower() for kw in meaningful_keywords) for fix in applied_fixes
+            )
+            
+            if has_meaningful_changes:
+                try:
+                    from .godot_explainer import GodotExplainer
+                    explainer = GodotExplainer()
+                    comparison = explainer.compare(code, fixed_code)
+                    
+                    # Only call LLM if there are actual code changes detected
+                    if comparison['lines_changed'] > 0:
+                        summary_prompt = explainer.get_summary_prompt(comparison)
+                        
+                        # Call LLM for friendly summary (use analyze function with empty context)
+                        print(f"[DEBUG] Requesting LLM summary...")
+                        llm_summary = analyze(summary_prompt, "", self.history, chat_mode=self.chat_mode)
+                        print(f"[DEBUG] LLM summary received")
+                except Exception as summarizer_error:
+                    print(f"[DEBUG] LLM summarizer failed: {summarizer_error}, using fallback")
+                    llm_summary = ""
+            
             # Build clean output: Summary + Change notification + Fixed code preview (background processing)
             if len(applied_fixes) > 0 or fixed_code != code:
                 # Create brief header with change count
                 lines_changed = len(applied_fixes)
                 output_header = f"✓ Optimized: {lines_changed} improvement(s) made\n"
                 
-                # Add brief explanation (no LLM needed for simple fixes)
-                output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
+                # Add LLM summary if available, otherwise use Python-generated explanation
+                if llm_summary:
+                    output_header += f"\n{llm_summary}\n"
+                else:
+                    output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
                 
                 # AUTO-SAVE with backup using SafeFileWriter
                 if auto_save:
