@@ -34,6 +34,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from core.librarian import get_librarian
+from core.writer import get_writer
+from core.autonomy import SafetyBudget, TaskQueue
 
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
@@ -1605,6 +1608,12 @@ class EtherBrain:
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
+        self.librarian = get_librarian()
+        self.writer = get_writer()
+        # Incremental autonomy control plane (disabled background execution by default)
+        self.autonomy_queue = TaskQueue()
+        self.autonomy_budget = SafetyBudget(max_units=10)
+        self.autonomy_scheduler_enabled = False
     
     def load_project_from_zip(self, zip_data: bytes) -> Tuple[bool, str]:
         """
@@ -1759,6 +1768,7 @@ class EtherBrain:
             
             # Get context lazily (only loads relevant files)
             context = ""
+            kb_context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
                 # SMART CONTEXT LOADING - Adaptive based on intent type
@@ -1774,6 +1784,13 @@ class EtherBrain:
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+            # Pull knowledge-base context for every complex turn
+            kb_context = self.librarian.retrieve(query, mode=self.chat_mode, max_chunks=3)
+            if kb_context:
+                if context:
+                    context = f"{kb_context}\n\n{context}"
+                else:
+                    context = kb_context
             
             # Add memory context if available
             memory_context = self._get_memory_context(query)
@@ -1802,6 +1819,11 @@ class EtherBrain:
                     else:
                         # Fallback if static analysis couldn't run
                         text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    text = self.writer.format_response(
+                        text,
+                        format_type="explanation",
+                        title="Project Analysis",
+                    )
                     
                     # Cache the result
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
@@ -1882,6 +1904,7 @@ class EtherBrain:
                 try:
                     text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
                                "", chat_mode=self.chat_mode)
+                    text = self.writer.enhance_chat_response(text, kb_context)
                     # Cache chat responses too
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log
@@ -1896,6 +1919,36 @@ class EtherBrain:
         import re
         match = re.search(r'([\w\-]+\.gd)', query.lower())
         return match.group(1) if match else None
+
+    def get_autonomy_status_report(self) -> Dict[str, object]:
+        """
+        Compare current runtime state against autonomy target capabilities.
+        This enables step-by-step rollout without overengineering.
+        """
+        return {
+            "queue": {
+                "implemented": True,
+                "pending_tasks": self.autonomy_queue.size(),
+            },
+            "scheduler": {
+                "implemented": False,
+                "enabled": self.autonomy_scheduler_enabled,
+            },
+            "planner_executor_critic": {
+                "implemented": False,
+                "notes": "Control primitive exists in core.autonomy, not wired to runtime flow yet.",
+            },
+            "safety_budget": {
+                "implemented": True,
+                "max_units": self.autonomy_budget.max_units,
+                "used_units": self.autonomy_budget.used_units,
+                "remaining_units": self.autonomy_budget.remaining(),
+            },
+            "long_term_success_metrics": {
+                "implemented": False,
+                "notes": "Existing memory_core focuses on fixes; goal-level success metrics still pending.",
+            },
+        }
     
     def _resolve_file_path(self, filename: str) -> Optional[str]:
         """
