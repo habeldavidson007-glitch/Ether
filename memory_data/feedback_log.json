@@ -1,7 +1,7 @@
 [
   {
     "id": "80a4e9eef75f",
-    "timestamp": "2026-04-22T17:12:36.693758",
+    "timestamp": "2026-04-22T17:17:33.255703",
     "query": "test optimization",
     "file_path": "test.gd",
     "error_type": "",
@@ -12,9 +12,23 @@
       "query_length": 17,
       "code_lines": 1,
       "fix_lines": 1,
-      "keywords": [
-        "var"
-      ]
+      "keywords": []
+    }
+  },
+  {
+    "id": "82fd6439bed1",
+    "timestamp": "2026-04-22T17:17:33.257185",
+    "query": "test query",
+    "file_path": "test.gd",
+    "error_type": "",
+    "feedback": "accepted",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "general",
+      "query_length": 10,
+      "code_lines": 1,
+      "fix_lines": 1,
+      "keywords": []
     }
   }
 ]

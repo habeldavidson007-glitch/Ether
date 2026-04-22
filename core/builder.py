@@ -1792,20 +1792,39 @@ class EtherBrain:
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
             
-            # NEW: Ether Brain Expansion - Add knowledge base context from Librarian
-            if self.librarian:
-                kb_context = self.librarian.retrieve(query, mode=self.chat_mode, top_k=2)
-                if kb_context:
-                    step("📚 Knowledge base context retrieved")
-                    if context:
-                        context = kb_context + "\n\n" + context
-                    else:
-                        context = kb_context
+            # NEW: Trinity Architecture - Unified Search & Adaptive Memory
+            if self.search_engine:
+                # Hybrid search across project code + knowledge base
+                step("🔍 Unified search (project + knowledge)...")
+                search_results = self.search_engine.search(query, mode="hybrid", top_k=3)
+                if search_results:
+                    # Format search results as context
+                    context_parts = []
+                    for result in search_results:
+                        if 'content' in result:
+                            source = result.get('source', 'Unknown')
+                            context_parts.append(f"# From {source}:\n{result['content'][:500]}")
+                    
+                    if context_parts:
+                        kb_context = "\n\n".join(context_parts)
+                        step(f"📚 Retrieved {len(search_results)} relevant contexts")
+                        if context:
+                            context = kb_context + "\n\n" + context
+                        else:
+                            context = kb_context
             
-            # Add memory context if available
-            memory_context = self._get_memory_context(query)
-            if memory_context:
-                context = memory_context + "\n\n" + context
+            # NEW: Adaptive Memory - Get learning context from past feedback
+            if self.memory:
+                step("🧠 Adaptive memory retrieval...")
+                # Get file path if available
+                file_path = ""
+                filename_match = re.search(r'([\w\-]+\.gd)', query.lower())
+                if filename_match and self.project_loader:
+                    file_path = filename_match.group(1)
+                
+                learning_context = self.memory.get_learning_context(query, file_path)
+                if learning_context:
+                    context = learning_context + "\n\n" + context
             
             # Run appropriate pipeline with PIPELINE REORDERING (v1.9 FIX)
             # KEY: File-specific tasks use scoped_loader, NOT global analyzer
@@ -2307,16 +2326,25 @@ Write fixed code now:"""
                     self.last_optimized_code = fixed_code
                     self.last_optimized_file_path = file_path  # Track the file path
                     
-                    # STEP 6: Record Fix in Memory for Future Learning (NEW)
+                    # STEP 6: Record Fix in Adaptive Memory for Self-Learning (NEW - Trinity Architecture)
                     if self.memory and len(applied_fixes) > 0:
                         try:
-                            self.memory.record_fix(
+                            # Record the successful fix pattern
+                            self.memory.record_feedback(
+                                query=user_query,
+                                original_code=code[:2000],  # Store first 2000 chars for context
+                                suggested_fix=fixed_code[:2000],
+                                user_feedback="accepted",  # Auto-accept since Python fixer applied it
                                 file_path=file_path,
-                                issues_fixed=applied_fixes,
-                                success=True,
-                                context={"query": user_query, "original_lines": len(code.splitlines()), "fixed_lines": len(fixed_code.splitlines())}
+                                error_type=", ".join(issues) if issues else "optimization",
+                                metadata={
+                                    "original_lines": len(code.splitlines()),
+                                    "fixed_lines": len(fixed_code.splitlines()),
+                                    "fixes_applied": len(applied_fixes),
+                                    "auto_saved": auto_save
+                                }
                             )
-                            print(f"[DEBUG] Fix recorded in memory")
+                            print(f"[DEBUG] Fix recorded in adaptive memory for learning")
                         except Exception as mem_error:
                             print(f"[DEBUG] Memory recording failed: {mem_error}")
                     

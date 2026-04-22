@@ -19,6 +19,13 @@
       "fix_preview": "const X = 1",
       "success_count": 1,
       "last_used": "2026-04-22T17:12:36.693758"
+    },
+    {
+      "query_pattern": "test query",
+      "keywords": [],
+      "fix_preview": "new code",
+      "success_count": 1,
+      "last_used": "2026-04-22T17:17:33.257185"
     }
   ]
 }
