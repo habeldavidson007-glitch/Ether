@@ -2003,6 +2003,7 @@ Write fixed code now:"""
 
     def _call_llm_with_retry_wrapper(self, prompt: str, primary_model: str, fallback_model: str, timeout: int = 60, extract_mode: str = "general") -> Tuple[str, str, str, float]:
         """Wrapper to call _call_llm_with_retry function from within EtherBrain class."""
+        # Use the full retry logic with code extraction for code generation tasks
         return _call_llm_with_retry(prompt, primary_model, fallback_model, timeout, extract_mode)
 
     # ── OPTIMIZATION HANDLER (v1.9.8 Fusion Pipeline) ───────────────────────────
@@ -2078,7 +2079,7 @@ Write fixed code now:"""
                     summary_prompt = explainer.get_summary_prompt(comparison)
                     print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
                     
-                    _, llm_summary, _, _ = self._call_llm_with_retry(
+                    _, llm_summary, _, _ = self._call_llm_with_retry_wrapper(
                         summary_prompt,
                         primary_model=self.primary_model,
                         fallback_model=self.fallback_model,
