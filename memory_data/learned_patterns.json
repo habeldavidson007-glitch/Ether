@@ -1,0 +1,24 @@
+{
+  "general_.gd": [
+    {
+      "query_pattern": "test optimization",
+      "keywords": [
+        "var"
+      ],
+      "fix_preview": "const X = 1",
+      "original_preview": "var x = 1",
+      "success_count": 1,
+      "last_used": "2026-04-22T17:06:40.138315",
+      "file_type": ".gd"
+    },
+    {
+      "query_pattern": "test optimization",
+      "keywords": [
+        "var"
+      ],
+      "fix_preview": "const X = 1",
+      "success_count": 1,
+      "last_used": "2026-04-22T17:12:36.693758"
+    }
+  ]
+}
