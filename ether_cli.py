@@ -51,9 +51,9 @@ class EtherCLI:
         print("    /mode <name>   — Switch mode (coding/general/mixed)")
         print("    /clear         — Clear chat history")
         print("    /save [path]   — Save last optimized code to file")
-        print("    /save [path]   — Save last optimized code to file")
         print("    /help          — Show this help")
         print("    /quit          — Exit Ether")
+        print("\n  ⚡ Auto-Save: Optimized code is automatically saved to the original file!")
         print("\n  Just type your question to chat with Ether!")
         print("-" * 70 + "\n")
     

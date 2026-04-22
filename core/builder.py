@@ -1820,7 +1820,8 @@ class EtherBrain:
                             query_lower = query.lower()
                             if any(k in query_lower for k in ["optimize", "improve", "refactor", "clean", "simplify"]):
                                 step(f"🔧 Using Lite Thinking Engine for {target_file}")
-                                result_text = self.handle_optimize(target_file, query)
+                                # Enable auto-save by default for optimize commands
+                                result_text = self.handle_optimize(target_file, query, auto_save=True)
                                 return {"type": "chat", "text": result_text}, log
                         
                         # Fallback: Reuse debug pipeline for generate
@@ -2009,13 +2010,19 @@ Write fixed code now:"""
     # ── OPTIMIZATION HANDLER (v1.9.8 Fusion Pipeline) ───────────────────────────
     # Fused: Scoped Load → Analyze → Lite Think → Generate
 
-    def handle_optimize(self, file_path: str, user_query: str) -> str:
+    def handle_optimize(self, file_path: str, user_query: str, auto_save: bool = False) -> str:
         """
-        Fused Optimization Pipeline v1.9.8 (3-Step Hybrid Python+LLM):
+        Fused Optimization Pipeline v1.9.9 (3-Step Hybrid Python+LLM + Auto-Save):
         1. GodotFixer applies deterministic fixes (unlimited chars)
         2. GodotExplainer compares and explains changes
         3. LLM Summarizer generates brief summary (≤600 chars)
+        4. Auto-save to original file if requested
         
+        Args:
+            file_path: Path to GDScript file to optimize
+            user_query: User's optimization request
+            auto_save: If True, write optimized code back to original file
+            
         Returns: Fixed code with explanation and LLM summary.
         """
         # STEP 1: Load Full File (GodotFixer needs complete context for unused var detection)
@@ -2088,6 +2095,19 @@ Write fixed code now:"""
                     
                     if llm_summary and llm_summary.strip():
                         output_header += f"\n\n✨ {llm_summary.strip()}"
+                
+                # AUTO-SAVE: Write optimized code back to original file if requested
+                if auto_save:
+                    try:
+                        # Resolve absolute path
+                        abs_path = Path(file_path).resolve()
+                        with open(abs_path, 'w', encoding='utf-8') as f:
+                            f.write(fixed_code)
+                        output_header += f"\n\n✓ Auto-saved to: {abs_path}"
+                        print(f"[DEBUG] Auto-saved optimized code to {abs_path}")
+                    except Exception as save_error:
+                        output_header += f"\n⚠ Auto-save failed: {save_error}"
+                        print(f"[DEBUG] Auto-save error: {save_error}")
                 
                 # TRUNCATE displayed code to prevent terminal overload (show preview only)
                 # Full code is available but we only show first 50 lines / ~1500 chars as preview
