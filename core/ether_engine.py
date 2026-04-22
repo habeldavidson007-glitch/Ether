@@ -69,12 +69,8 @@ class EtherEngine:
         self._brain = EtherBrain()
         self._project_loader = LazyProjectLoader()
         
-        # Try to import optional components
-        try:
-            from core.rag_engine import RAGEngine
-            self._rag_engine = RAGEngine()
-        except ImportError:
-            self._rag_engine = None
+        # RAG engine removed - functionality merged into librarian.py and context_manager.py
+        self._rag_engine = None
         
         try:
             from core.static_analyzer import StaticAnalyzer

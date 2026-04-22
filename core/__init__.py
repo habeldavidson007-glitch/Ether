@@ -1,4 +1,4 @@
-from .state import EtherSession, classify, is_casual, recall, remember
+from .context_manager import EtherSession, classify, is_casual, recall, remember, ContextChunker, smart_load_context
 from .scanner import build_project_map, extract_zip, select_context
 from .builder import run_pipeline
 from .safety import preview_changes, apply_changes
@@ -13,7 +13,7 @@ from .cascade_scanner import CascadeScanner, create_cascade_scanner, CascadeRepo
 from .godot_expert import GodotExpert, SemanticSceneEditor
 
 __all__ = [
-    'EtherSession', 'classify', 'is_casual', 'recall', 'remember',
+    'EtherSession', 'classify', 'is_casual', 'recall', 'remember', 'ContextChunker', 'smart_load_context',
     'build_project_map', 'extract_zip', 'select_context',
     'run_pipeline',
     'preview_changes', 'apply_changes',

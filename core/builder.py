@@ -2013,7 +2013,7 @@ class EtherBrain:
     def _get_memory_context(self, query: str) -> str:
         """Get relevant past interactions from memory."""
         try:
-            from core.state import recall
+            from .context_manager import recall
             hits = recall(query)
             if not hits:
                 return ""
