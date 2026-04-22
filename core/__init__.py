@@ -11,6 +11,11 @@ from .gdscript_ast import GDScriptAST, SurgicalSplicer, CodeNode, NodeType
 from .memory_core import MemoryCore, create_memory_core
 from .cascade_scanner import CascadeScanner, create_cascade_scanner, CascadeReport, CascadeWarning
 from .godot_expert import GodotExpert, SemanticSceneEditor
+from .librarian import get_librarian
+from .writer import get_writer
+from .learning_engine import get_learning_engine
+from .compressed_search import get_compressed_search
+from .structural_rag import get_structural_index
 
 __all__ = [
     'EtherSession', 'classify', 'is_casual', 'recall', 'remember', 'ContextChunker', 'smart_load_context',
@@ -26,4 +31,9 @@ __all__ = [
     'MemoryCore', 'create_memory_core',
     'CascadeScanner', 'create_cascade_scanner', 'CascadeReport', 'CascadeWarning',
     'GodotExpert', 'SemanticSceneEditor',
+    # New modules
+    'get_librarian', 'get_writer',
+    'get_learning_engine',
+    'get_compressed_search',
+    'get_structural_index',
 ]
