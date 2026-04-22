@@ -1,9 +1,11 @@
 ```
-# Compiled Python files
-*.pyc
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Logs and data files
-*.log
-memory_data/*.json
+# Local data files
+memory_data/feedback_log.json
+memory_data/learned_patterns.json
 ```

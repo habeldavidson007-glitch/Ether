@@ -26,6 +26,33 @@
       "fix_preview": "new code",
       "success_count": 1,
       "last_used": "2026-04-22T17:17:33.257185"
+    },
+    {
+      "query_pattern": "test query",
+      "keywords": [
+        "var"
+      ],
+      "fix_preview": "var x: int = 1",
+      "success_count": 1,
+      "last_used": "2026-04-22T17:19:28.012137"
+    },
+    {
+      "query_pattern": "test via builder",
+      "keywords": [
+        "func"
+      ],
+      "fix_preview": "func test() -> void: pass",
+      "success_count": 1,
+      "last_used": "2026-04-22T17:20:18.612401"
+    },
+    {
+      "query_pattern": "optimize movement",
+      "keywords": [
+        "var"
+      ],
+      "fix_preview": "@export var speed: float = 300.0",
+      "success_count": 1,
+      "last_used": "2026-04-22T17:20:36.638436"
     }
   ]
 }

@@ -35,6 +35,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+# Trinity Architecture Imports
+from .unified_search import get_unified_search
+from .adaptive_memory import get_adaptive_memory
+
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
 # Converts vague user requests into atomic, bounded instructions for LLM
@@ -1606,6 +1610,10 @@ class EtherBrain:
         # NEW: Initialize memory_core and cascade_scanner to None by default
         self.memory_core = None
         self.cascade_scanner = None
+        
+        # Trinity Architecture: Unified Search & Adaptive Memory (initialized on project load)
+        self.search_engine = None
+        self.memory = None
         
         # NEW: Ether Brain Expansion - Librarian & Writer
         try:
