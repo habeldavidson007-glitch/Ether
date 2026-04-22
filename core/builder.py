@@ -1602,6 +1602,17 @@ class EtherBrain:
         self.dependency_graph = None  # NEW: Dependency graph for impact analysis
         self.godot_validator = None   # NEW: Godot runtime validator
         self.scene_graph_analyzer = None  # NEW: Scene graph analyzer (Step 3)
+        
+        # NEW: Ether Brain Expansion - Librarian & Writer
+        try:
+            from .librarian import get_librarian
+            from .writer import get_writer
+            self.librarian = get_librarian()
+            self.writer = get_writer()
+        except Exception as e:
+            self.librarian = None
+            self.writer = None
+        
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -1775,6 +1786,16 @@ class EtherBrain:
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
             
+            # NEW: Ether Brain Expansion - Add knowledge base context from Librarian
+            if self.librarian:
+                kb_context = self.librarian.retrieve(query, mode=self.chat_mode, top_k=2)
+                if kb_context:
+                    step("📚 Knowledge base context retrieved")
+                    if context:
+                        context = kb_context + "\n\n" + context
+                    else:
+                        context = kb_context
+            
             # Add memory context if available
             memory_context = self._get_memory_context(query)
             if memory_context:
@@ -1802,6 +1823,10 @@ class EtherBrain:
                     else:
                         # Fallback if static analysis couldn't run
                         text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    
+                    # NEW: Enhance response with Writer if available
+                    if self.writer:
+                        text = self.writer.format_response(text, format_type="explanation", title="Project Analysis")
                     
                     # Cache the result
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
@@ -1882,6 +1907,11 @@ class EtherBrain:
                 try:
                     text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
                                "", chat_mode=self.chat_mode)
+                    
+                    # NEW: Enhance chat response with Writer if available
+                    if self.writer and context:
+                        text = self.writer.enhance_chat_response(text, context)
+                    
                     # Cache chat responses too
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log
@@ -2233,6 +2263,17 @@ Write fixed code now:"""
                     except Exception as save_error:
                         output_header += f"\n⚠ Auto-save failed: {save_error}"
                         print(f"[DEBUG] Auto-save error: {save_error}")
+                
+                # NEW: Enhance output with Writer if available
+                if self.writer and len(applied_fixes) > 0:
+                    try:
+                        output_header = self.writer.format_response(
+                            output_header,
+                            format_type="code_review",
+                            title=f"Optimization Report: {file_path}"
+                        )
+                    except Exception as writer_error:
+                        print(f"[DEBUG] Writer enhancement failed: {writer_error}")
                 
                 # TRUNCATE displayed code to prevent terminal overload (show preview only)
                 # Full code is available but we only show first 50 lines / ~1500 chars as preview
