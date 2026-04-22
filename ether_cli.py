@@ -34,6 +34,7 @@ class EtherCLI:
         self.brain = EtherBrain()
         self.running = True
         self.project_path: Optional[str] = None
+        self.last_optimized_code: Optional[str] = None  # Store last optimized code
         
         # Welcome message
         print("\n" + "=" * 70)
@@ -49,6 +50,8 @@ class EtherCLI:
         print("    /status        — Show project stats")
         print("    /mode <name>   — Switch mode (coding/general/mixed)")
         print("    /clear         — Clear chat history")
+        print("    /save [path]   — Save last optimized code to file")
+        print("    /save [path]   — Save last optimized code to file")
         print("    /help          — Show this help")
         print("    /quit          — Exit Ether")
         print("\n  Just type your question to chat with Ether!")
@@ -194,6 +197,18 @@ class EtherCLI:
                 self.brain.cache.clear()
             print("✓ Chat history and cache cleared.\n")
         
+        elif cmd == '/save':
+            if self.last_optimized_code:
+                save_path = arg if arg else "optimized_code.gd"
+                try:
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        f.write(self.last_optimized_code)
+                    print(f"✓ Code saved to: {save_path}\n")
+                except Exception as e:
+                    print(f"❌ Error saving file: {e}\n")
+            else:
+                print("❌ No optimized code to save. Run 'optimize <file>' first.\n")
+        
         elif cmd == '/help':
             self.show_help()
         
@@ -217,10 +232,18 @@ class EtherCLI:
         print("-" * 60)
         
         # Extract text from result with safe fallback
-        response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
+        if isinstance(result, str):
+            response = result
+        else:
+            response = result.get("text") or result.get("summary") or result.get("root_cause") or "No response generated."
+        
+        # Check if this is an optimization result (contains full code)
+        # handle_optimize stores code in brain.last_optimized_code directly
+        if hasattr(self.brain, 'last_optimized_code') and self.brain.last_optimized_code:
+            self.last_optimized_code = self.brain.last_optimized_code
         
         # If this is a build/debug response, show change summary first
-        if result.get("type") == "build" or result.get("type") == "debug":
+        if isinstance(result, dict) and (result.get("type") == "build" or result.get("type") == "debug"):
             changes = result.get("changes", [])
             if changes:
                 print("\n📝 Changes Made:")

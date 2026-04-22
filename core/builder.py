@@ -1,8 +1,14 @@
 """
-Ether v1.9.6 — AI Pipeline (Windows-Safe Execution)
-====================================================
+Ether v1.9.8 — AI Pipeline (Windows-Safe Execution) with Hybrid 2-Step Fusion
+=============================================================================
 Multi-model, role-based, lazy execution.
 CPU-only. 2GB RAM safe. One model per request.
+
+CRITICAL FIXES IN v1.9.8:
+1. Zero-Cost Static Analyzer (Python-native issue detection)
+2. 2-Step Lite Thinking Engine (Refine → Rewrite pattern)
+3. Hybrid fusion: Python reasoning + LLM code generation
+4. Strict character limits (Code ≤600, Prompts ≤300-500)
 
 CRITICAL FIXES IN v1.9.6:
 1. Direct stdin pipe (NO shell/temp file) - fixes Windows path with spaces error
@@ -160,6 +166,39 @@ Context:
 
 Output:
 Code only."""
+
+
+# ── ZERO-COST STATIC ANALYZER (v1.9.8) ────────────────────────────────────────
+# Pure Python issue detection to offload reasoning from LLM
+
+def lightweight_analyzer(code: str) -> list:
+    """
+    Zero-cost static analysis to detect obvious issues without using LLM.
+    Returns: List of max 2 short string issues.
+    """
+    issues = []
+    lines = code.splitlines()
+    
+    # Detect long files
+    if len(lines) > 50:
+        issues.append("File too long")
+    
+    # Detect too many loops
+    if code.count("for ") > 2:
+        issues.append("Too many loops")
+    
+    # Detect debug prints
+    if "print(" in code:
+        issues.append("Debug prints left")
+    
+    # Simple unused variable check
+    vars_declared = re.findall(r"var (\w+)", code)
+    for v in vars_declared:
+        if code.count(v) == 1:
+            issues.append(f"Unused var: {v}")
+    
+    # Limit to top 2 issues
+    return issues[:2]
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -385,13 +424,23 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
     
     FIX v1.9.7: Replaced manual stdin write + streaming with communicate() to eliminate deadlock.
     This guarantees reliable execution on Windows without pipe synchronization issues.
+    
+    NOTE: Temperature/top_p are NOT passed via CLI - Ollama uses model defaults.
+    For custom parameters, use Ollama API or create Modelfile (not implemented for simplicity).
     """
     start_time = time.time()
+    
+    # Build command - Ollama run uses model defaults, no CLI parameters supported
+    cmd = [
+        "ollama", 
+        "run", 
+        model
+    ]
     
     try:
         # 1. Start process with direct pipes (NO shell=True)
         process = subprocess.Popen(
-            ["ollama", "run", model],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -450,7 +499,7 @@ def _run_ollama_subprocess(prompt: str, model: str, timeout: int = 60, max_chars
         }
 
 
-def _extract_code_safe(text: str) -> str:
+def _extract_code_safe(text: str, mode: str = "general") -> str:
     """
     Aggressive Code Extractor - NEVER fails.
     
@@ -459,6 +508,11 @@ def _extract_code_safe(text: str) -> str:
     2. Try generic ``` ... ``` blocks  
     3. Fallback: scan for code keywords (func, var, if, =)
     4. Last resort: return truncated raw text
+    
+    v1.9.8 FIX: Added 'extends' as code keyword for GDScript detection.
+    v1.9.8 OPTIMIZATION: Mode parameter allows different extraction strictness.
+    - "optimize" mode: Accepts ANY non-empty text as valid code
+    - "general" mode: Uses standard keyword detection
     
     Never returns empty string unless input is empty.
     """
@@ -477,7 +531,8 @@ def _extract_code_safe(text: str) -> str:
     
     # Priority 3: Fallback heuristic - scan for code keywords
     lines = text.splitlines()
-    code_keywords = ["func", "var", "if", "for", "class", "@export", "@onready"]
+    # v1.9.8 FIX: Added 'extends' for GDScript class detection
+    code_keywords = ["func", "var", "if", "for", "class", "@export", "@onready", "extends"]
     code_lines = [
         l for l in lines 
         if any(l.strip().startswith(k) for k in code_keywords) or "=" in l.strip()
@@ -486,21 +541,31 @@ def _extract_code_safe(text: str) -> str:
     if code_lines:
         return "\n".join(code_lines[:40]).strip()
     
-    # Priority 4: Return raw text truncated (never fail)
+    # Priority 4: ULTRA-AGGRESSIVE MODE - Return ANY non-empty text for optimize requests
+    if mode == "optimize":
+        # For optimization, just return the raw response cleaned up
+        # The model might output explanations mixed with code
+        return text.strip()[:500]
+    
+    # Priority 5: Return raw text truncated (never fail)
     return text[:500]
 
 
-def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, timeout: int = 60) -> Tuple[str, str, str, float]:
+def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, timeout: int = 60, extract_mode: str = "general") -> Tuple[str, str, str, float]:
     """
     Production-grade LLM caller with retry logic.
     Only retries if output is TRULY EMPTY, not just short.
     Returns: (raw_output, extracted_code, model_used, time_taken)
+    
+    v1.9.8: Now supports configurable timeout for 2-step thinking engine.
+    v1.9.8 OPTIMIZATION: extract_mode parameter controls code extraction strictness.
+    Use "optimize" mode for code generation tasks to accept any non-empty output.
     """
-    # Try primary model
+    # Try primary model with default temperature settings
     result = _run_ollama_subprocess(prompt, primary_model, timeout=timeout)
     
     raw_output = result.get("output", "")
-    extracted_code = _extract_code_safe(raw_output)
+    extracted_code = _extract_code_safe(raw_output, mode=extract_mode)
     
     # Debug logging
     print(f"[DEBUG] Model: {primary_model}")
@@ -516,11 +581,13 @@ def _call_llm_with_retry(prompt: str, primary_model: str, fallback_model: str, t
     # 🔁 Fallback ONLY if truly empty
     print("[DEBUG] Primary empty → trying fallback with simplified prompt")
     
-    simplified_prompt = "Return ONLY GDScript code. Max 15 lines. No explanations.\n\n" + prompt[:300]
-    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=40)
+    # v1.9.8 FIX: Even simpler fallback prompt for 1.5B models
+    simplified_prompt = f"Code:{prompt[:200]}\nOutput:"
+    fallback_timeout = max(20, timeout - 10)  # Shorter timeout for fallback
+    fallback_result = _run_ollama_subprocess(simplified_prompt, fallback_model, timeout=fallback_timeout)
     
     fallback_raw = fallback_result.get("output", "")
-    fallback_extracted = _extract_code_safe(fallback_raw)
+    fallback_extracted = _extract_code_safe(fallback_raw, mode=extract_mode)
     
     print(f"[DEBUG] Fallback raw length: {len(fallback_raw)}")
     print(f"[DEBUG] Fallback stderr: {fallback_result.get('stderr', '')[:200]}")
@@ -1510,13 +1577,14 @@ You are helpful and conversational. Be friendly but concise."""
 
 class EtherBrain:
     """
-    Ether v1.9 — Main Engine Class (Merged with v2.0 optimizations)
+    Ether v1.9.8 — Main Engine Class with Hybrid 2-Step Fusion
     
     Integrates:
     1. Intent-Aware Routing (fast path for simple queries)
     2. Lazy Loading Architecture (via project_loader)
     3. Cached Intelligence Layer (TTL-based response cache)
     4. v2.0 Role-based execution model
+    5. Zero-Cost Static Analyzer + 2-Step Lite Thinking Engine
     
     Usage:
         brain = EtherBrain()
@@ -1530,6 +1598,10 @@ class EtherBrain:
         self.project_fingerprint = "empty"
         self.history: List[Dict[str, str]] = []
         self.chat_mode = "mixed"
+        self.last_optimized_code: Optional[str] = None  # Store last optimized code for /save command
+        # Model configuration for 2-step thinking engine
+        self.primary_model = PRIMARY_MODEL
+        self.fallback_model = FALLBACK_MODEL
     
     def load_project_from_zip(self, zip_data: bytes) -> Tuple[bool, str]:
         """
@@ -1740,7 +1812,19 @@ class EtherBrain:
                 else:  # generate
                     step("✨ Generating optimization...")
                     try:
-                        result = debug(final_prompt, context)  # Reuse debug pipeline for generate
+                        # CRITICAL FIX v1.9.8: Use handle_optimize for file-specific optimization requests
+                        # This uses the 2-Step Lite Thinking Engine instead of generic debug pipeline
+                        target_file = task.get('target')
+                        if target_file and self.project_loader:
+                            # Check if this is an optimization/refactoring request
+                            query_lower = query.lower()
+                            if any(k in query_lower for k in ["optimize", "improve", "refactor", "clean", "simplify"]):
+                                step(f"🔧 Using Lite Thinking Engine for {target_file}")
+                                result_text = self.handle_optimize(target_file, query)
+                                return {"type": "chat", "text": result_text}, log
+                        
+                        # Fallback: Reuse debug pipeline for generate
+                        result = debug(final_prompt, context)
                         return {"type": "debug", **result}, log
                     except Exception as e:
                         return {"type": "chat", "text": f"❌ Generation error: {str(e)}"}, log
@@ -1837,3 +1921,206 @@ class EtherBrain:
     def clear_cache(self) -> None:
         """Clear the response cache."""
         _response_cache.clear()
+
+    # ── 2-STEP LITE THINKING ENGINE (v1.9.8) ────────────────────────────────────
+    # Guided generation: Refine Issues → Rewrite Code
+
+    def thinking_engine_v2_lite(self, code: str, detected_issues: list) -> str:
+        """
+        2-Step Guided Generation: Refine Issues -> Rewrite Code.
+        
+        Step 1 (Refine): Send Python-detected issues to LLM for brief refinement.
+        Step 2 (Rewrite): Send refined issues + code snippet, ask ONLY for fixed code.
+        
+        Returns: Improved code or fallback message.
+        """
+        # Hard limit on code size - but be smarter about it
+        # Take first N lines that fit within 400 chars to leave room for instructions
+        max_code_chars = 400
+        code = code[:max_code_chars]
+        
+        # Build issues text
+        issues_text = ", ".join(detected_issues) if detected_issues else "Improve code quality"
+
+        # STEP 1: Refine issues (SKIP if issues are already specific from Python)
+        # Python's lightweight_analyzer already gives specific issues like "Unused var: X"
+        # Only refine if issues are vague
+        refined_issues = issues_text
+        if detected_issues and len(detected_issues) <= 2:
+            # Python already gave specific issues, skip Step 1 to save time
+            print(f"[DEBUG] Skipping Step 1 - Python issues are specific enough")
+        else:
+            # Only run Step 1 if we need clarification
+            prompt_1 = f"Issues:{issues_text}\nList fixes (max 3 words each):"
+            prompt_1 = prompt_1[:200]  # Enforce strict limit
+            
+            print(f"[DEBUG] Step 1 Prompt: {prompt_1}")
+            
+            # Use existing retry logic with short timeout (~10s)
+            _, refined_issues_result, _, _ = self._call_llm_with_retry_wrapper(
+                prompt_1, 
+                primary_model=self.primary_model, 
+                fallback_model=self.fallback_model,
+                timeout=10
+            )
+            
+            # Fallback if refinement failed
+            if refined_issues_result and refined_issues_result.strip():
+                refined_issues = refined_issues_result.strip()
+                print(f"[DEBUG] Refined issues: {refined_issues}")
+            else:
+                print(f"[DEBUG] Step 1 failed, using original issues")
+
+        # STEP 2: Rewrite code (ULTRA-DIRECTIVE prompt for 1.5B model)
+        # CRITICAL: Force the model to start writing immediately
+        prompt_2 = f"""gdscript:
+{code}
+
+Fix:{refined_issues[:80]}
+
+Write fixed code now:"""
+        prompt_2 = prompt_2[:500]  # Enforce strict limit
+        
+        print(f"[DEBUG] Step 2 Prompt length: {len(prompt_2)}")
+        
+        # Use optimize mode for ultra-aggressive extraction
+        _, improved, _, time_taken = self._call_llm_with_retry_wrapper(
+            prompt_2,
+            primary_model=self.primary_model,
+            fallback_model=self.fallback_model,
+            timeout=25,
+            extract_mode="optimize"
+        )
+        
+        print(f"[DEBUG] Step 2 took {time_taken}s, output length: {len(improved) if improved else 0}")
+        
+        # FINAL FALLBACK: If still empty, return code with minor edits or raw message
+        if not improved or not improved.strip():
+            # Return original code with a note
+            return f"# Optimization suggested: {refined_issues[:50]}\n{code}"
+        
+        return improved.strip()
+
+    def _call_llm_with_retry_wrapper(self, prompt: str, primary_model: str, fallback_model: str, timeout: int = 60, extract_mode: str = "general") -> Tuple[str, str, str, float]:
+        """Wrapper to call _call_llm_with_retry function from within EtherBrain class."""
+        return _call_llm_with_retry(prompt, primary_model, fallback_model, timeout, extract_mode)
+
+    # ── OPTIMIZATION HANDLER (v1.9.8 Fusion Pipeline) ───────────────────────────
+    # Fused: Scoped Load → Analyze → Lite Think → Generate
+
+    def handle_optimize(self, file_path: str, user_query: str) -> str:
+        """
+        Fused Optimization Pipeline v1.9.8 (3-Step Hybrid Python+LLM):
+        1. GodotFixer applies deterministic fixes (unlimited chars)
+        2. GodotExplainer compares and explains changes
+        3. LLM Summarizer generates brief summary (≤600 chars)
+        
+        Returns: Fixed code with explanation and LLM summary.
+        """
+        # STEP 1: Load Full File (GodotFixer needs complete context for unused var detection)
+        if not self.project_loader:
+            return "No project loaded."
+        
+        # Use get_content - DO NOT truncate, fixer needs full file to detect unused vars correctly
+        code = self.project_loader.get_content(file_path)
+        if not code:
+            return "Could not load file."
+        
+        print(f"[DEBUG] Loaded full code length: {len(code)} chars ({len(code.splitlines())} lines)")
+
+        # STEP 2: Static Analysis on FULL code (Instant)
+        issues = lightweight_analyzer(code)
+        print(f"[DEBUG] Detected issues: {issues}")
+
+        # STEP 3: Godot-Specific Python Fixer (deterministic, uses existing workspace files)
+        try:
+            from .godot_fixer import GodotFixer
+            from .godot_explainer import GodotExplainer
+            
+            # Get path to existing workspace structure
+            base_dir = Path(__file__).parent.parent
+            workspace_path = base_dir / "workspace"
+            
+            # Verify workspace exists with required files
+            if not workspace_path.exists():
+                raise FileNotFoundError(f"Workspace not found: {workspace_path}")
+            
+            memory_path = workspace_path / "memory.json"
+            knowledge_dir = workspace_path / "knowledge"
+            
+            if not memory_path.exists():
+                print(f"[WARN] Memory file not found: {memory_path}, using defaults")
+            if not knowledge_dir.exists():
+                print(f"[WARN] Knowledge directory not found: {knowledge_dir}, using defaults")
+            
+            # Initialize fixer with existing workspace (no separate knowledge.json needed)
+            fixer = GodotFixer(str(workspace_path))
+            fixed_code, applied_fixes = fixer.apply_fixes(code, issues)
+            
+            # STEP 4: Godot Explainer - Compare and explain changes
+            explainer = GodotExplainer()
+            comparison = explainer.compare(code, fixed_code)
+            
+            print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
+            print(f"[DEBUG] Explainer detected {comparison['lines_changed']} changes")
+            
+            # Build clean output: Summary + Change notification + Fixed code preview (background processing)
+            if comparison['lines_changed'] > 0 or len(applied_fixes) > 0:
+                # Create brief header with change count
+                lines_changed = comparison['lines_changed']
+                output_header = f"✓ Optimized: {lines_changed} improvement(s) made\n"
+                
+                # Add brief explanation (no LLM needed for simple fixes)
+                output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
+                
+                # Call LLM for summary when there are ANY fixes (not just >3)
+                if len(applied_fixes) > 0:
+                    summary_prompt = explainer.get_summary_prompt(comparison)
+                    print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
+                    
+                    _, llm_summary, _, _ = self._call_llm_with_retry(
+                        summary_prompt,
+                        primary_model=self.primary_model,
+                        fallback_model=self.fallback_model,
+                        timeout=15
+                    )
+                    
+                    if llm_summary and llm_summary.strip():
+                        output_header += f"\n\n✨ {llm_summary.strip()}"
+                
+                # TRUNCATE displayed code to prevent terminal overload (show preview only)
+                # Full code is available but we only show first 50 lines / ~1500 chars as preview
+                max_display_lines = 50
+                max_display_chars = 1500
+                fixed_lines = fixed_code.splitlines()
+                
+                if len(fixed_lines) > max_display_lines or len(fixed_code) > max_display_chars:
+                    preview_lines = fixed_lines[:max_display_lines]
+                    preview_code = "\n".join(preview_lines)
+                    if len(preview_code) > max_display_chars:
+                        preview_code = preview_code[:max_display_chars]
+                    
+                    # Truncate indicator
+                    remaining_lines = len(fixed_lines) - max_display_lines
+                    preview_code += f"\n\n# ... ({remaining_lines} more lines truncated - full code saved internally)"
+                    
+                    # Store full code in brain for /save command
+                    self.last_optimized_code = fixed_code
+                    
+                    return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Full optimized code ready (use /save to export if needed)"
+                else:
+                    # Small file, show all
+                    # Store full code for /save command
+                    self.last_optimized_code = fixed_code
+                    return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
+            else:
+                # No fixes applied - show small preview
+                preview_lines = fixed_code.splitlines()[:30]
+                preview_code = "\n".join(preview_lines)
+                return f"No specific improvements needed. Code follows GDScript best practices.\n\n```gdscript\n{preview_code}\n```... (truncated)"
+            
+        except Exception as e:
+            print(f"[DEBUG] GodotFixer/Explainer failed: {e}, falling back to LLM engine")
+            # Fallback to old LLM-based engine if fixer fails
+            result = self.thinking_engine_v2_lite(code, issues)
+            return result
