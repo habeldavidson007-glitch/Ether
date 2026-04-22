@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass, field
 
+# Import unified code fixer for automatic repairs
+from .code_fixer import apply_fixes
+
 
 @dataclass
 class Finding:
@@ -132,14 +135,36 @@ class StaticAnalyzer:
             
             # Check for large scripts
             if len(lines) > self.LARGE_SCRIPT_THRESHOLD:
-                self.findings.append(Finding(
+                finding = Finding(
                     file_path=rel_path,
                     line_number=None,
                     category="Code Size",
                     severity="medium",
                     message=f"Large script ({len(lines)} lines)",
                     suggestion=f"Consider splitting into smaller modules or components"
-                ))
+                )
+                self.findings.append(finding)
+                
+                # AUTO-FIX: Apply code fixes immediately for large files
+                print(f"[AUTO-FIX] Applying automatic fixes to {file_path.name}...")
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        code = f.read()
+                    
+                    fixed_code, fixes = apply_fixes(code, str(file_path))
+                    
+                    if fixes:
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(fixed_code)
+                        print(f"[AUTO-FIX] ✓ Applied {len(fixes)} automatic improvements to {file_path.name}")
+                        for fix in fixes[:3]:  # Show first 3 fixes
+                            print(f"         {fix}")
+                        if len(fixes) > 3:
+                            print(f"         ... and {len(fixes) - 3} more")
+                    else:
+                        print(f"[AUTO-FIX] ℹ No automated fixes available for {file_path.name}")
+                except Exception as e:
+                    print(f"[AUTO-FIX] ✗ Error applying fixes: {e}")
             
             # Analyze line by line
             self._check_process_logic(rel_path, lines)
