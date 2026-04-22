@@ -408,11 +408,677 @@ global_position += root_motion
 """
 
 
-# Continue with more generators...
+# ============================================================================
+# ADDITIONAL GENERATORS (10+ more specialized topics)
+# ============================================================================
+
+class GodotSignalsGenerator(KnowledgeGenerator):
+    """Advanced Godot signals and communication patterns."""
+    
+    def __init__(self):
+        super().__init__("godot_signals", "godot_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# Godot Signals & Communication Patterns
+
+## Custom Signals
+
+### Declaration & Emission
+```gdscript
+# Declare signals at top of script
+signal health_changed(new_value: int, old_value: int)
+signal player_died
+signal item_collected(item_name: String, quantity: int)
+
+# Emit with arguments
+emit_signal("health_changed", new_hp, old_hp)
+# Or shorthand:
+health_changed.emit(new_hp, old_hp)
+```
+
+## Connection Modes
+
+### Disconnect Behavior
+- **Default**: Auto-disconnect on object destruction
+- **PERSIST**: Survives save/load (rarely needed)
+- **ONE_SHOT**: Disconnects after first emission
+
+```gdscript
+# Connect with flags
+enemy.health_changed.connect(_on_enemy_hit, CONNECT_ONE_SHOT)
+```
+
+## Advanced Patterns
+
+### 1. Signal Bus (Global Event System)
+```gdscript
+# autoload/global_events.gd
+signal game_over
+signal wave_completed(wave_number: int)
+signal achievement_unlocked(id: String)
+
+# Anywhere in project
+GlobalEvents.game_over.connect(_on_game_over)
+GlobalEvents.emit_signal("wave_completed", 5)
+```
+
+### 2. Weak References (Prevent Memory Leaks)
+```gdscript
+var ref = weakref(some_node)
+if ref.get_ref():
+    ref.get_ref().do_something()
+```
+
+### 3. Dynamic Connections
+```gdscript
+# Connect all enemies to player
+for enemy in get_tree().get_nodes_in_group("enemies"):
+    enemy.died.connect(_on_enemy_died.bind(enemy))
+```
+
+## Debugging Signals
+- Use `Object.is_connected(signal, callable)` to verify
+- Check connections in Remote Inspector
+- Avoid connecting in `_ready()` for frequently instanced nodes
+"""
+
+
+class GodotResourcesGenerator(KnowledgeGenerator):
+    """Godot Resource system and data-driven design."""
+    
+    def __init__(self):
+        super().__init__("godot_resources", "godot_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# Godot Resource System Mastery
+
+## What are Resources?
+- Data containers saved as `.tres` or `.res` files
+- Inherit from `Resource` class
+- Support custom properties, export hints, nesting
+- Reference-counted (automatic memory management)
+
+## Creating Custom Resources
+
+### Basic Resource Class
+```gdscript
+class_name ItemData extends Resource
+
+@export var item_name: String
+@export var icon: Texture2D
+@export var stats: Dictionary = {"str": 0, "dex": 0}
+@export_file("*.tscn") var scene_path: String
+@export_enum("Common", "Rare", "Epic", "Legendary") var rarity: int
+```
+
+### Usage Patterns
+
+#### 1. Data-Driven Item System
+```gdscript
+@export var items: Array[ItemData]
+
+func get_item(index: int) -> ItemData:
+    return items[index] if index < items.size() else null
+
+func equip_item(item: ItemData):
+    if item:
+        apply_stats(item.stats)
+```
+
+#### 2. Dynamic Loading
+```gdscript
+var resource = load("res://data/items/sword.tres")
+var new_resource = resource.duplicate() # Safe modification
+```
+
+#### 3. Nested Resources
+```gdscript
+class_name QuestData extends Resource
+@export var title: String
+@export var objectives: Array[ObjectiveData]
+@export var rewards: Array[ItemData]
+```
+
+## Best Practices
+- Use `@export_resource` for type safety (Godot 4.2+)
+- Avoid loading large resources in `_ready()`; use threads
+- Resources are reference-counted; manual `free()` rarely needed
+- Use `take_over_path()` when replacing saved resources
+"""
+
+
+class CPPMemoryGenerator(KnowledgeGenerator):
+    """C++ memory management for game development."""
+    
+    def __init__(self):
+        super().__init__("cpp_memory", "cpp_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# C++ Memory Management for Games
+
+## Smart Pointers (Modern C++)
+
+### Unique Pointer (Exclusive Ownership)
+```cpp
+std::unique_ptr<Player> player = std::make_unique<Player>();
+player->update(); // Auto-deleted when out of scope
+
+// Transfer ownership
+std::unique_ptr<Player> ptr2 = std::move(player);
+```
+
+### Shared Pointer (Reference Counted)
+```cpp
+std::shared_ptr<Texture> tex = std::make_shared<Texture>("path.png");
+auto copy = tex; // Reference count increases
+// Auto-deleted when last reference dies
+```
+
+### Weak Pointer (Non-Owning Observer)
+```cpp
+std::weak_ptr<Player> weak = player;
+if(auto locked = weak.lock()) {
+    locked->take_damage(10);
+}
+```
+
+## RAII Pattern
+
+### Resource Acquisition Is Initialization
+```cpp
+class FileHandle {
+    FILE* file;
+public:
+    FileHandle(const char* path) { file = fopen(path, "r"); }
+    ~FileHandle() { if(file) fclose(file); }
+    // Disable copy
+    FileHandle(const FileHandle&) = delete;
+};
+```
+
+## Custom Allocators
+
+### Stack Allocator for Temporary Objects
+```cpp
+class StackAllocator {
+    char* buffer;
+    size_t offset = 0;
+public:
+    void* allocate(size_t size) {
+        void* ptr = buffer + offset;
+        offset += size;
+        return ptr;
+    }
+    void reset() { offset = 0; } // Free all at once
+};
+```
+
+## Common Pitfalls
+- **Dangling Pointers**: Check lifetime before using raw pointers
+- **Circular References**: Use `weak_ptr` to break cycles
+- **Mixing Allocators**: Don't `delete` custom allocator memory
+- **Premature Optimization**: Profile first!
+"""
+
+
+class CPPPerformanceGenerator(KnowledgeGenerator):
+    """C++ performance optimization patterns."""
+    
+    def __init__(self):
+        super().__init__("cpp_performance", "cpp_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# C++ Performance Patterns
+
+## Data-Oriented Design
+
+### Structure of Arrays (Cache Friendly)
+```cpp
+// ❌ Bad: Array of Structures
+struct Entity { Vec3 pos; Vec3 vel; bool active; };
+std::vector<Entity> entities;
+
+// ✅ Good: Structure of Arrays
+struct EntityArray {
+    std::vector<Vec3> positions;
+    std::vector<Vec3> velocities;
+    std::vector<bool> active;
+};
+```
+
+## Move Semantics
+```cpp
+// Avoid copies
+std::string process(std::string&& input) {
+    return input + "_processed";
+}
+auto result = process(std::move(large_string));
+```
+
+## Inline & Constexpr
+```cpp
+inline float clamp(float v, float min, float max) {
+    return v < min ? min : (v > max ? max : v);
+}
+
+constexpr int factorial(int n) {
+    return n <= 1 ? 1 : n * factorial(n - 1);
+}
+```
+
+## Profiling Tools
+- **Valgrind**: Memory leak detection
+- **perf** (Linux): CPU profiling
+- **Visual Studio Profiler**: Windows tool
+- **Tracy**: Real-time game profiler (recommended)
+"""
+
+
+class ShaderBasicsGenerator(KnowledgeGenerator):
+    """Godot shader programming fundamentals."""
+    
+    def __init__(self):
+        super().__init__("shader_basics", "godot_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# Godot Shader Language (GDShader)
+
+## Shader Types
+- **Spatial**: 3D lighting, materials
+- **CanvasItem**: 2D sprites, UI effects
+- **Particles**: GPU particle behavior
+
+## Basic Spatial Shader
+```glsl
+shader_type spatial;
+
+uniform vec4 albedo : source_color;
+uniform float metallic;
+uniform float roughness;
+
+void vertex() {
+    UV = UV * 2.0; // Tile texture
+}
+
+void fragment() {
+    ALBEDO = albedo.rgb;
+    METALLIC = metallic;
+    ROUGHNESS = roughness;
+}
+```
+
+## Common Effects
+
+### Dissolve Effect
+```glsl
+uniform sampler2D noise_texture;
+uniform float dissolve_amount : hint_range(0, 1);
+
+void fragment() {
+    float noise = texture(noise_texture, UV).r;
+    if (noise < dissolve_amount) discard;
+    ALBEDO = mix(albedo, vec3(1.0), 
+                 smoothstep(dissolve_amount-0.1, dissolve_amount, noise));
+}
+```
+
+### Fresnel Outline
+```glsl
+uniform vec4 outline_color : source_color;
+
+void fragment() {
+    float fresnel = dot(NORMAL, VIEW);
+    float outline = smoothstep(0.2, 0.0, fresnel);
+    ALBEDO = mix(albedo, outline_color.rgb, outline);
+}
+```
+
+## Performance Tips
+- Use precision hints: `lowp`, `mediump`, `highp`
+- Avoid branching; use `mix()` or `step()`
+- Minimize texture samples
+- Use `INSTANCE_CUSTOM` for batching
+"""
+
+
+class NetworkingGenerator(KnowledgeGenerator):
+    """Godot multiplayer and networking."""
+    
+    def __init__(self):
+        super().__init__("godot_networking", "godot_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# Godot Multiplayer & Networking
+
+## High-Level API
+
+### MultiplayerSpawner
+```gdscript
+var spawner = MultiplayerSpawner.new()
+spawner.spawn_path = NodePath("World/Enemies")
+add_child(spawner)
+
+enemy.set_multiplayer_authority(1) # Server authority
+spawner.add_spawnable_node(enemy)
+```
+
+## RPC (Remote Procedure Calls)
+```gdscript
+@rpc("any_peer", "call_local", "reliable")
+func take_damage(amount: int, source_id: int):
+    health -= amount
+    if multiplayer.is_server():
+        rpc("sync_health", health)
+
+@rpc("authority", "unreliable")
+func sync_health(new_health: int):
+    health = new_health
+```
+
+## Connection Handling
+```gdscript
+var peer = ENetMultiplayerPeer.new()
+
+# Host server
+peer.create_server(1234, max_clients=32)
+multiplayer.multiplayer_peer = peer
+
+# Join client
+peer.create_client("192.168.1.100", 1234)
+
+# Signals
+multiplayer.peer_connected.connect(_on_player_join)
+```
+
+## Authority & Prediction
+- **Server Authority**: Validate all actions (anti-cheat)
+- **Client Prediction**: Execute locally, reconcile later
+- **Lag Compensation**: Store input history, rewind on mismatch
+"""
+
+
+class DesignPatternsGameGenerator(KnowledgeGenerator):
+    """Game-specific design patterns."""
+    
+    def __init__(self):
+        super().__init__("design_patterns_game", "architecture", "coding")
+    
+    def generate(self) -> str:
+        return """# Game Design Patterns
+
+## 1. Object Pool
+```gdscript
+class BulletPool:
+    var pool: Array[Bullet] = []
+    
+    func get_bullet() -> Bullet:
+        return pool.pop_back() if pool.size() > 0 else Bullet.new()
+    
+    func return_bullet(b: Bullet):
+        b.reset()
+        pool.append(b)
+```
+
+## 2. State Machine
+```gdscript
+class State:
+    func enter(): pass
+    func process(delta): pass
+    func exit(): pass
+
+class StateMachine:
+    var current: State
+    func process(delta):
+        var next = current.process(delta)
+        if next:
+            current.exit()
+            current = next
+            current.enter()
+```
+
+## 3. Event Bus
+```gdscript
+# Global singleton
+signal game_event(event_name: String, data: Dictionary)
+
+# Publish/Subscribe
+EventBus.game_event.emit("enemy_defeated", {"xp": 50})
+EventBus.game_event.connect(_on_game_event)
+```
+
+## 4. Component Pattern
+```gdscript
+class Entity:
+    var components: Dictionary = {}
+    func add_component(name, comp): components[name] = comp
+
+class HealthComponent:
+    var hp: int = 100
+    func take_damage(amount): hp -= amount
+```
+"""
+
+
+class AsyncProgrammingGenerator(KnowledgeGenerator):
+    """Asynchronous programming patterns."""
+    
+    def __init__(self):
+        super().__init__("async_programming", "general_programming", "coding")
+    
+    def generate(self) -> str:
+        return """# Asynchronous Programming Patterns
+
+## Godot Async/Await
+```gdscript
+# Modern await syntax (Godot 4.x)
+func load_level_async(path: String):
+    var resource = await ResourceLoader.load_threaded_request(path)
+    $LoadingScreen.hide()
+    return resource
+
+# Sequential awaits
+func fetch_data():
+    var user = await api.get_user(id)
+    var posts = await api.get_posts(user.id)
+    return {"user": user, "posts": posts}
+
+# Parallel awaits
+func fetch_parallel():
+    var results = await [api.get_a(), api.get_b(), api.get_c()]
+```
+
+## Error Handling
+```gdscript
+func safe_fetch(url):
+    try:
+        return await http.get(url)
+    catch err:
+        print("Fetch failed: ", err)
+        return null
+
+# Retry pattern
+func fetch_with_retry(url, retries=3):
+    for i in range(retries):
+        var result = await safe_fetch(url)
+        if result: return result
+        await get_tree().create_timer(1.0).timeout
+    return null
+```
+
+## Best Practices
+- Always await in async functions
+- Use `try/catch` for I/O operations
+- Cancel pending operations on scene exit
+"""
+
+
+class ErrorHandlingGenerator(KnowledgeGenerator):
+    """Error handling and robustness patterns."""
+    
+    def __init__(self):
+        super().__init__("error_handling", "general_programming", "coding")
+    
+    def generate(self) -> str:
+        return """# Error Handling Patterns
+
+## Result Type Pattern
+```gdscript
+class Result:
+    var success: bool
+    var value: Variant
+    var error: String
+    
+    static func ok(v) -> Result:
+        var r = Result.new()
+        r.success = true
+        r.value = v
+        return r
+    
+    static func err(msg) -> Result:
+        var r = Result.new()
+        r.success = false
+        r.error = msg
+        return r
+
+func divide(a, b) -> Result:
+    if b == 0:
+        return Result.err("Division by zero")
+    return Result.ok(a / b)
+```
+
+## Defensive Programming
+```gdscript
+func attack(target: Node, damage: int):
+    assert(target != null, "Target cannot be null")
+    assert(damage >= 0, "Damage must be non-negative")
+    
+    if not is_instance_valid(target):
+        push_warning("Target already freed")
+        return
+    
+    target.take_damage(damage)
+```
+
+## Logging Strategies
+```gdscript
+enum LogLevel { DEBUG, INFO, WARN, ERROR }
+
+func log(level: LogLevel, msg: String):
+    var timestamp = Time.get_datetime_string_from_system()
+    print("[%s] %s: %s" % [timestamp, ["DBG","INF","WRN","ERR"][level], msg])
+```
+"""
+
+
+class GodotOptimizationGenerator(KnowledgeGenerator):
+    """Godot performance optimization guide."""
+    
+    def __init__(self):
+        super().__init__("godot_optimization", "godot_advanced", "coding")
+    
+    def generate(self) -> str:
+        return """# Godot Performance Optimization
+
+## Rendering Optimization
+- Use occlusion culling for 3D scenes
+- Batch draw calls with same material
+- Use texture atlases for 2D sprites
+- Limit real-time lights; use baked lighting
+
+## Physics Optimization
+- Use simple collision shapes (boxes, spheres)
+- Disable contact_monitor on bodies without signals
+- Use layers/masks to reduce collision checks
+- Freeze static bodies when not needed
+
+## Script Optimization
+- Cache node references in `_ready()`
+- Use `_physics_process()` only for physics
+- Avoid `get_node()` in loops
+- Use `@onready` for dependent nodes
+
+## Memory Optimization
+- Use object pooling for frequent spawn/despawn
+- Free resources when not needed
+- Use `weakref` to prevent circular references
+- Monitor memory in Debugger → Monitor → Memory
+"""
+
+
+class TroubleshootingGenerator(KnowledgeGenerator):
+    """Common Godot troubleshooting guide."""
+    
+    def __init__(self):
+        super().__init__("troubleshooting_godot", "godot_advanced", "mixed")
+    
+    def generate(self) -> str:
+        return """# Godot Troubleshooting Guide
+
+## Common Issues & Solutions
+
+### "Node not found" Error
+**Cause:** Wrong path or node not yet in tree
+**Fix:**
+```gdscript
+# Use @onready for dependent nodes
+@onready var sprite = $Sprite2D
+
+# Or check existence
+if has_node("Sprite2D"):
+    $Sprite2D.visible = true
+```
+
+### Memory Leak Detection
+1. Open Debugger → Monitor → Memory
+2. Watch for continuous growth
+3. Check for circular references
+4. Ensure `queue_free()` is called
+
+### Performance Drops
+1. Open Profiler (F3)
+2. Check for expensive operations in `_process()`
+3. Look for excessive draw calls
+4. Monitor physics objects count
+
+### Signal Not Firing
+- Verify connection: `Object.is_connected()`
+- Check if emitter is freed prematurely
+- Ensure correct signal signature
+
+### Build Export Issues
+- Check export presets include all resources
+- Verify file paths are lowercase (Linux)
+- Test with debug export first
+"""
+
+
+# ============================================================================
+# GENERATOR REGISTRY
+# ============================================================================
+
 GENERATORS: List[KnowledgeGenerator] = [
+    # Godot Advanced (5)
     GodotPhysicsGenerator(),
     GodotAnimationGenerator(),
-    # More will be added below
+    GodotSignalsGenerator(),
+    GodotResourcesGenerator(),
+    GodotOptimizationGenerator(),
+    
+    # C++ Advanced (2)
+    CPPMemoryGenerator(),
+    CPPPerformanceGenerator(),
+    
+    # Shaders & Networking (2)
+    ShaderBasicsGenerator(),
+    NetworkingGenerator(),
+    
+    # Architecture & Patterns (2)
+    DesignPatternsGameGenerator(),
+    TroubleshootingGenerator(),
+    
+    # General Programming (2)
+    AsyncProgrammingGenerator(),
+    ErrorHandlingGenerator(),
 ]
 
 

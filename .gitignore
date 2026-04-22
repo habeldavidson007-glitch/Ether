@@ -1,17 +1,5 @@
 ```
-# State files
-courier/daemon_state.json
-
-# Logs and temporary files
-*.log
-*.tmp
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Python specific
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -20,27 +8,42 @@ __pycache__/
 env/
 venv/
 .venv/
-.venv*/
+.ENV
 .python-version
+
+# Build artifacts
+build/
+dist/
+*.egg
+*.egg-info/
+*.so
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+*.env.*
+
+# Coverage reports
+.coverage
+htmlcov/
+.coverage.*
+.cache/
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Testing
 .pytest_cache/
 .mypy_cache/
-.coverage
-coverage/
-htmlcov/
-
-# Build and distribution artifacts
-dist/
-build/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
 ```
