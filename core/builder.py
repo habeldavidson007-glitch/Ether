@@ -1680,23 +1680,25 @@ class EtherBrain:
                 except Exception as e:
                     pass  # Optional feature, continue if it fails
                 
-                # NEW: Initialize Memory Core and Cascade Scanner
+                # NEW: Initialize Unified Search and Adaptive Memory (Trinity Architecture)
                 try:
-                    from core.memory_core import MemoryCore
-                    from core.cascade_scanner import CascadeScanner
+                    from core.unified_search import get_unified_search
+                    from core.adaptive_memory import get_adaptive_memory
                     
                     if isinstance(folder_path, Path):
                         project_path = str(folder_path)
                     else:
                         project_path = folder_path
                     
-                    self.memory_core = MemoryCore(project_path)
-                    self.cascade_scanner = CascadeScanner(
-                        self.dependency_graph,
-                        None,  # Will set static_analyzer if available
-                        self.memory_core
-                    )
+                    self.search_engine = get_unified_search(project_path)
+                    self.memory = get_adaptive_memory()
+                    
+                    # Legacy compatibility
+                    self.memory_core = self.memory
+                    self.cascade_scanner = None  # Deprecated in favor of unified search
                 except Exception as e:
+                    self.search_engine = None
+                    self.memory = None
                     self.memory_core = None
                     self.cascade_scanner = None
             
@@ -2149,11 +2151,11 @@ Write fixed code now:"""
             
         Returns: Fixed code with explanation and LLM summary.
         """
-        # STEP 0: Check Memory for Similar Past Fixes (NEW - Learning from History)
-        if self.memory_core:
-            code_hash = self.memory_core._hash_code(user_query + file_path)
-            similar_fixes = self.memory_core.get_similar_fixes(file_path, code_hash)
-            recurring_issues = self.memory_core.get_recurring_issues(file_path)
+        # STEP 0: Check Adaptive Memory for Similar Past Fixes (NEW - Learning from History)
+        if self.memory:
+            code_hash = self.memory._hash_code(user_query + file_path)
+            similar_fixes = self.memory.get_similar_fixes(file_path, code_hash)
+            recurring_issues = self.memory.get_recurring_issues(file_path)
             
             if similar_fixes:
                 print(f"[DEBUG] Memory found {len(similar_fixes)} similar past fixes")
@@ -2306,9 +2308,9 @@ Write fixed code now:"""
                     self.last_optimized_file_path = file_path  # Track the file path
                     
                     # STEP 6: Record Fix in Memory for Future Learning (NEW)
-                    if self.memory_core and len(applied_fixes) > 0:
+                    if self.memory and len(applied_fixes) > 0:
                         try:
-                            self.memory_core.record_fix(
+                            self.memory.record_fix(
                                 file_path=file_path,
                                 issues_fixed=applied_fixes,
                                 success=True,
@@ -2326,9 +2328,9 @@ Write fixed code now:"""
                     self.last_optimized_file_path = file_path  # Track the file path
                     
                     # STEP 6: Record Fix in Memory for Future Learning (NEW)
-                    if self.memory_core and len(applied_fixes) > 0:
+                    if self.memory and len(applied_fixes) > 0:
                         try:
-                            self.memory_core.record_fix(
+                            self.memory.record_fix(
                                 file_path=file_path,
                                 issues_fixed=applied_fixes,
                                 success=True,
@@ -2345,9 +2347,9 @@ Write fixed code now:"""
                 preview_code = "\n".join(preview_lines)
                 
                 # Still record in memory that no issues were found (useful pattern)
-                if self.memory_core:
+                if self.memory:
                     try:
-                        self.memory_core.record_fix(
+                        self.memory.record_fix(
                             file_path=file_path,
                             issues_fixed=["No issues found"],
                             success=True,
