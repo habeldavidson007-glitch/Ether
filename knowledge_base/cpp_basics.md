@@ -1,8 +1,7 @@
 ---
 source: cpp_basics
+updated: 2026-04-22T16:02:41.475296
 mode: coding
-topics: c++, memory, pointers, smart pointers, RAII, modern c++
-updated: 2026-04-22T14:42:07.214227
 ---
 
 # C++ Programming Knowledge Base

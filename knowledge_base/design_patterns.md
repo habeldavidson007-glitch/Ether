@@ -1,8 +1,7 @@
 ---
 source: design_patterns
+updated: 2026-04-22T16:02:41.476035
 mode: coding
-topics: design patterns, singleton, factory, solid, architecture
-updated: 2026-04-22T14:42:07.214444
 ---
 
 # Design Patterns Knowledge Base

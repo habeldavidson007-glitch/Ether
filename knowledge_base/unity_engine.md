@@ -1,8 +1,7 @@
 ---
 source: unity_engine
+updated: 2026-04-22T16:02:41.475647
 mode: coding
-topics: unity, c#, monobehaviour, components, coroutines
-updated: 2026-04-22T14:42:07.214335
 ---
 
 # Unity Engine Knowledge Base

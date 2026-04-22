@@ -1,8 +1,7 @@
 ---
 source: unreal_engine
+updated: 2026-04-22T16:02:41.475491
 mode: coding
-topics: unreal, blueprints, uobject, actors, game development
-updated: 2026-04-22T14:42:07.214285
 ---
 
 # Unreal Engine Knowledge Base

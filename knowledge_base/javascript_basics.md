@@ -1,8 +1,7 @@
 ---
 source: javascript_basics
+updated: 2026-04-22T16:02:41.475809
 mode: coding
-topics: javascript, async, promises, dom, es6
-updated: 2026-04-22T14:42:07.214382
 ---
 
 # JavaScript Knowledge Base

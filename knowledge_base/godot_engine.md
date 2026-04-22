@@ -1,8 +1,7 @@
 ---
 source: godot_engine
+updated: 2026-04-22T16:02:41.475000
 mode: coding
-topics: godot, gdscript, game development, nodes, scenes, signals
-updated: 2026-04-22T14:42:07.214064
 ---
 
 # Godot Engine Knowledge Base

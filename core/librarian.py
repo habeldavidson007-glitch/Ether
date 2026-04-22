@@ -131,6 +131,11 @@ class Librarian:
             print(f"[Librarian] Knowledge base not found at {self.kb_path}")
             return False
         
+        # Clear existing index if forcing reload
+        if force_reload:
+            self.index = InvertedIndex()
+            self.file_cache.clear()
+        
         # Map file modes based on filename patterns
         mode_mapping = {
             "godot": "coding",

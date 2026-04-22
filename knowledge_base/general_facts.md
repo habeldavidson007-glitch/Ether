@@ -1,8 +1,7 @@
 ---
 source: general_facts
+updated: 2026-04-22T16:02:41.476230
 mode: general
-topics: health, productivity, learning, technology, lifestyle
-updated: 2026-04-22T14:42:07.214521
 ---
 
 # General Facts Knowledge Base
