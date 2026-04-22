@@ -2116,12 +2116,14 @@ Write fixed code now:"""
                     
                     # Store full code in brain for /save command
                     self.last_optimized_code = fixed_code
+                    self.last_optimized_file_path = file_path  # Track the file path
                     
                     return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Full optimized code ready (use /save to export if needed)"
                 else:
                     # Small file, show all
                     # Store full code for /save command
                     self.last_optimized_code = fixed_code
+                    self.last_optimized_file_path = file_path  # Track the file path
                     return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
             else:
                 # No fixes applied - show small preview

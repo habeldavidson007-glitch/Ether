@@ -35,6 +35,7 @@ class EtherCLI:
         self.running = True
         self.project_path: Optional[str] = None
         self.last_optimized_code: Optional[str] = None  # Store last optimized code
+        self.last_optimized_file_path: Optional[str] = None  # Store path of last optimized file
         
         # Welcome message
         print("\n" + "=" * 70)
@@ -199,7 +200,8 @@ class EtherCLI:
         
         elif cmd == '/save':
             if self.last_optimized_code:
-                save_path = arg if arg else "optimized_code.gd"
+                # Default to last optimized file path if available, otherwise use generic name
+                save_path = arg if arg else self.last_optimized_file_path or "optimized_code.gd"
                 try:
                     with open(save_path, 'w', encoding='utf-8') as f:
                         f.write(self.last_optimized_code)
@@ -241,6 +243,8 @@ class EtherCLI:
         # handle_optimize stores code in brain.last_optimized_code directly
         if hasattr(self.brain, 'last_optimized_code') and self.brain.last_optimized_code:
             self.last_optimized_code = self.brain.last_optimized_code
+        if hasattr(self.brain, 'last_optimized_file_path') and self.brain.last_optimized_file_path:
+            self.last_optimized_file_path = self.brain.last_optimized_file_path
         
         # If this is a build/debug response, show change summary first
         if isinstance(result, dict) and (result.get("type") == "build" or result.get("type") == "debug"):
