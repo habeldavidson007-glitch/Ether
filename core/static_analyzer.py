@@ -147,42 +147,45 @@ class StaticAnalyzer:
                 )
                 self.findings.append(finding)
                 
-                # AUTO-FIX: Apply AST-aware surgical fixes immediately for large files
-                print(f"[AST-FIX] Applying surgical fixes to {file_path.name}...")
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        code = f.read()
-                    
-                    # Phase 1: Apply rule-based fixes (CodeFixer)
-                    fixed_code, fixes = apply_fixes(code, str(file_path))
-                    
-                    # Phase 2: Apply AST-aware surgical fixes
-                    splicer = SurgicalSplicer(fixed_code)
-                    surgical_fixes_count = 0
-                    
-                    # Remove duplicate signals via AST
-                    removed_dups = splicer.remove_duplicate_signals()
-                    if removed_dups > 0:
-                        surgical_fixes_count += removed_dups
-                        print(f"         [AST] Removed {removed_dups} duplicate signal(s)")
-                    
-                    # Get final code from splicer
-                    final_code = splicer.get_code()
-                    
-                    total_fixes = len(fixes) + surgical_fixes_count
-                    
-                    if total_fixes > 0:
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            f.write(final_code)
-                        print(f"[AST-FIX] ✓ Applied {total_fixes} surgical improvements to {file_path.name}")
-                        for fix in fixes[:3]:  # Show first 3 rule-based fixes
-                            print(f"         {fix}")
-                        if len(fixes) > 3:
-                            print(f"         ... and {len(fixes) - 3} more")
-                    else:
-                        print(f"[AST-FIX] ℹ No automated fixes available for {file_path.name}")
-                except Exception as e:
-                    print(f"[AST-FIX] ✗ Error applying surgical fixes: {e}")
+                # AUTO-FIX: Apply AST-aware surgical fixes ONLY during explicit optimization
+                # Skip auto-fixes during general analysis to prevent unwanted modifications
+                should_auto_fix = os.environ.get('ETHER_AUTO_FIX', 'false').lower() == 'true'
+                if should_auto_fix:
+                    print(f"[AST-FIX] Applying surgical fixes to {file_path.name}...")
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            code = f.read()
+                        
+                        # Phase 1: Apply rule-based fixes (CodeFixer)
+                        fixed_code, fixes = apply_fixes(code, str(file_path))
+                        
+                        # Phase 2: Apply AST-aware surgical fixes
+                        splicer = SurgicalSplicer(fixed_code)
+                        surgical_fixes_count = 0
+                        
+                        # Remove duplicate signals via AST
+                        removed_dups = splicer.remove_duplicate_signals()
+                        if removed_dups > 0:
+                            surgical_fixes_count += removed_dups
+                            print(f"         [AST] Removed {removed_dups} duplicate signal(s)")
+                        
+                        # Get final code from splicer
+                        final_code = splicer.get_code()
+                        
+                        total_fixes = len(fixes) + surgical_fixes_count
+                        
+                        if total_fixes > 0:
+                            with open(file_path, 'w', encoding='utf-8') as f:
+                                f.write(final_code)
+                            print(f"[AST-FIX] ✓ Applied {total_fixes} surgical improvements to {file_path.name}")
+                            for fix in fixes[:3]:  # Show first 3 rule-based fixes
+                                print(f"         {fix}")
+                            if len(fixes) > 3:
+                                print(f"         ... and {len(fixes) - 3} more")
+                        else:
+                            print(f"[AST-FIX] ℹ No automated fixes available for {file_path.name}")
+                    except Exception as e:
+                        print(f"[AST-FIX] ✗ Error applying surgical fixes: {e}")
             
             # Analyze line by line
             self._check_process_logic(rel_path, lines)

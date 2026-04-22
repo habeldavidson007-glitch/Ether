@@ -1817,6 +1817,9 @@ class EtherBrain:
                     if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
                         from core.static_analyzer import StaticAnalyzer
                         analyzer = StaticAnalyzer()
+                        # Disable auto-fix during analysis mode to prevent unwanted modifications
+                        import os
+                        os.environ['ETHER_AUTO_FIX'] = 'false'
                         static_report = analyzer.analyze(str(self.project_loader._base_path))
                         step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
                     
@@ -2198,7 +2201,10 @@ Write fixed code now:"""
                 if relevant_context:
                     print(f"[DEBUG] Extracted {len(relevant_context)} chars of relevant context")
         
-        # STEP 2: Static Analysis on FULL code (Instant)
+        # STEP 2: Static Analysis on FULL code (Instant) - DISABLE AUTO-FIX
+        # Temporarily disable auto-fix during handle_optimize to prevent double-fixing
+        import os
+        os.environ['ETHER_AUTO_FIX'] = 'false'
         issues = lightweight_analyzer(code)
         print(f"[DEBUG] Detected issues: {issues}")
 
