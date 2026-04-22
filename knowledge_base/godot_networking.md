@@ -1,6 +1,6 @@
 ---
 source: expander
-generated: 2026-04-22T16:10:25.817663
+generated: 2026-04-22T16:28:55.560366
 category: godot_advanced
 mode: coding
 ---
