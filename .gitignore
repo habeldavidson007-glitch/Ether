@@ -1,4 +1,4 @@
-```
+```gitignore
 # Python
 __pycache__/
 *.pyc
@@ -13,18 +13,24 @@ env/
 .env.local
 .env.*
 
-# Logs
+# Logs and temporary files
 *.log
+*.tmp
+*.swp
 
-# Editor/IDE
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-*.tmp
 
 # Build artifacts
-build/
 dist/
+build/
 target/
+*.o
+*.obj
+*.so
+*.a
+*.dll
+*.exe
+*.out
 ```
