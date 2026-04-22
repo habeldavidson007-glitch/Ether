@@ -6,11 +6,16 @@ __pycache__/
 *.pyd
 
 # Dependencies
-.venv/
 venv/
+.venv/
 .env
 .env.local
 *.env.*
+
+# Build artifacts
+dist/
+build/
+target/
 
 # Logs
 *.log
@@ -20,6 +25,18 @@ venv/
 coverage/
 htmlcov/
 
-# JSON data files that might be temporary
-memory_data/*.tmp
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.mypy_cache/
 ```

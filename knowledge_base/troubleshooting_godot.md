@@ -1,6 +1,6 @@
 ---
 source: expander
-generated: 2026-04-22T16:28:55.560431
+generated: 2026-04-22T17:29:13.111057
 category: godot_advanced
 mode: mixed
 ---
