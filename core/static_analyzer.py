@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 
 # Import unified code fixer for automatic repairs
 from .code_fixer import apply_fixes
+# Import AST-aware surgical splicer for precise modifications
+from .gdscript_ast import SurgicalSplicer
 
 
 @dataclass
@@ -145,26 +147,42 @@ class StaticAnalyzer:
                 )
                 self.findings.append(finding)
                 
-                # AUTO-FIX: Apply code fixes immediately for large files
-                print(f"[AUTO-FIX] Applying automatic fixes to {file_path.name}...")
+                # AUTO-FIX: Apply AST-aware surgical fixes immediately for large files
+                print(f"[AST-FIX] Applying surgical fixes to {file_path.name}...")
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         code = f.read()
                     
+                    # Phase 1: Apply rule-based fixes (CodeFixer)
                     fixed_code, fixes = apply_fixes(code, str(file_path))
                     
-                    if fixes:
+                    # Phase 2: Apply AST-aware surgical fixes
+                    splicer = SurgicalSplicer(fixed_code)
+                    surgical_fixes_count = 0
+                    
+                    # Remove duplicate signals via AST
+                    removed_dups = splicer.remove_duplicate_signals()
+                    if removed_dups > 0:
+                        surgical_fixes_count += removed_dups
+                        print(f"         [AST] Removed {removed_dups} duplicate signal(s)")
+                    
+                    # Get final code from splicer
+                    final_code = splicer.get_code()
+                    
+                    total_fixes = len(fixes) + surgical_fixes_count
+                    
+                    if total_fixes > 0:
                         with open(file_path, 'w', encoding='utf-8') as f:
-                            f.write(fixed_code)
-                        print(f"[AUTO-FIX] ✓ Applied {len(fixes)} automatic improvements to {file_path.name}")
-                        for fix in fixes[:3]:  # Show first 3 fixes
+                            f.write(final_code)
+                        print(f"[AST-FIX] ✓ Applied {total_fixes} surgical improvements to {file_path.name}")
+                        for fix in fixes[:3]:  # Show first 3 rule-based fixes
                             print(f"         {fix}")
                         if len(fixes) > 3:
                             print(f"         ... and {len(fixes) - 3} more")
                     else:
-                        print(f"[AUTO-FIX] ℹ No automated fixes available for {file_path.name}")
+                        print(f"[AST-FIX] ℹ No automated fixes available for {file_path.name}")
                 except Exception as e:
-                    print(f"[AUTO-FIX] ✗ Error applying fixes: {e}")
+                    print(f"[AST-FIX] ✗ Error applying surgical fixes: {e}")
             
             # Analyze line by line
             self._check_process_logic(rel_path, lines)
