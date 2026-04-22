@@ -2063,69 +2063,23 @@ Write fixed code now:"""
 
         # STEP 3: Godot-Specific Python Fixer (deterministic, uses existing workspace files)
         try:
-            from .godot_fixer import GodotFixer
-            from .godot_explainer import GodotExplainer
+            from .code_fixer import CodeFixer
             
-            # Get path to existing workspace structure
-            base_dir = Path(__file__).parent.parent
-            workspace_path = base_dir / "workspace"
+            # Initialize fixer
+            fixer = CodeFixer()
+            fixed_code, applied_fixes = fixer.apply_all_fixes(code, issues)
             
-            # Verify workspace exists with required files
-            if not workspace_path.exists():
-                raise FileNotFoundError(f"Workspace not found: {workspace_path}")
-            
-            memory_path = workspace_path / "memory.json"
-            knowledge_dir = workspace_path / "knowledge"
-            
-            if not memory_path.exists():
-                print(f"[WARN] Memory file not found: {memory_path}, using defaults")
-            if not knowledge_dir.exists():
-                print(f"[WARN] Knowledge directory not found: {knowledge_dir}, using defaults")
-            
-            # Initialize fixer with existing workspace (no separate knowledge.json needed)
-            fixer = GodotFixer(str(workspace_path))
-            fixed_code, applied_fixes = fixer.apply_fixes(code, issues)
-            
-            # STEP 4: Godot Explainer - Compare and explain changes
-            explainer = GodotExplainer()
-            comparison = explainer.compare(code, fixed_code)
-            
+            # STEP 4: Explain changes (simple text-based comparison)
             print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
-            print(f"[DEBUG] Explainer detected {comparison['lines_changed']} changes")
             
             # Build clean output: Summary + Change notification + Fixed code preview (background processing)
-            if comparison['lines_changed'] > 0 or len(applied_fixes) > 0:
+            if len(applied_fixes) > 0 or fixed_code != code:
                 # Create brief header with change count
-                lines_changed = comparison['lines_changed']
+                lines_changed = len(applied_fixes)
                 output_header = f"✓ Optimized: {lines_changed} improvement(s) made\n"
                 
                 # Add brief explanation (no LLM needed for simple fixes)
                 output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
-                
-                # Call LLM for summary with optimized prompt when there are ANY fixes
-                if len(applied_fixes) > 0:
-                    summary_prompt = explainer.get_summary_prompt(comparison)
-                    
-                    # Use prompt optimizer for small models
-                    if prompt_optimizer:
-                        print(f"[DEBUG] Optimizing prompt for small model...")
-                        summary_prompt = prompt_optimizer.optimize_for_task(
-                            'explain', 
-                            fixed_code[:500], 
-                            f"Summarize these changes: {', '.join(applied_fixes[:3])}"
-                        )
-                    
-                    print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
-                    
-                    _, llm_summary, _, _ = self._call_llm_with_retry_wrapper(
-                        summary_prompt,
-                        primary_model=self.primary_model,
-                        fallback_model=self.fallback_model,
-                        timeout=15
-                    )
-                    
-                    if llm_summary and llm_summary.strip():
-                        output_header += f"\n\n✨ {llm_summary.strip()}"
                 
                 # AUTO-SAVE with backup using SafeFileWriter
                 if auto_save:

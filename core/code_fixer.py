@@ -55,6 +55,14 @@ class CodeFixer:
         
         return code, self.fixes_applied
     
+    def apply_all_fixes(self, code: str, issues: List[str] = None) -> Tuple[str, List[str]]:
+        """
+        Alias for fix_code to match expected interface
+        Applies ALL fixes automatically
+        Returns: (fixed_code, list_of_fixes_applied)
+        """
+        return self.fix_code(code)
+    
     # ═══════════════════════════════════════════════════
     # BACKUP SYSTEM
     # ═══════════════════════════════════════════════════
