@@ -140,6 +140,25 @@ class EtherCLI:
                     filename = filepath.split('/')[-1]
                     print(f"     • {filename} ({count} dependents)")
         
+        # NEW: Show scene graph analyzer stats if available
+        if hasattr(self.brain, 'scene_graph_analyzer') and self.brain.scene_graph_analyzer:
+            scene_stats = self.brain.scene_graph_analyzer.get_scene_stats()
+            print(f"\n🎬 Scene Graph Analysis:")
+            print(f"  🎭 Total Scenes:    {scene_stats.get('total_scenes', 0)}")
+            print(f"  📦 Total Nodes:     {scene_stats.get('total_nodes', 0)}")
+            print(f"  📜 Script Attachments: {scene_stats.get('total_script_attachments', 0)}")
+            
+            issues = scene_stats.get('scenes_with_missing_resources', 0) + scene_stats.get('scenes_with_orphans', 0)
+            if issues > 0:
+                print(f"  ⚠ Issues Found:   {issues}")
+            
+            most_complex = scene_stats.get('most_complex_scenes', [])
+            if most_complex:
+                print(f"  🏗️ Most Complex:")
+                for scene_path, node_count in most_complex[:3]:
+                    scene_name = scene_path.split('/')[-1]
+                    print(f"     • {scene_name} ({node_count} nodes)")
+        
         print()
     
     def show_help(self):

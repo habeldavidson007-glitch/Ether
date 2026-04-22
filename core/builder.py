@@ -1601,6 +1601,7 @@ class EtherBrain:
         self.last_optimized_code: Optional[str] = None  # Store last optimized code for /save command
         self.dependency_graph = None  # NEW: Dependency graph for impact analysis
         self.godot_validator = None   # NEW: Godot runtime validator
+        self.scene_graph_analyzer = None  # NEW: Scene graph analyzer (Step 3)
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -1653,6 +1654,14 @@ class EtherBrain:
                 try:
                     from core.godot_validator import GodotValidator
                     self.godot_validator = GodotValidator()
+                except Exception as e:
+                    pass  # Optional feature, continue if it fails
+                
+                # NEW: Initialize scene graph analyzer (Step 3)
+                try:
+                    from core.scene_graph_analyzer import SceneGraphAnalyzer
+                    self.scene_graph_analyzer = SceneGraphAnalyzer()
+                    self.scene_graph_analyzer.analyze_project(str(folder_path))
                 except Exception as e:
                     pass  # Optional feature, continue if it fails
             

@@ -5,6 +5,7 @@ from .safety import preview_changes, apply_changes
 from .ether_engine import EtherEngine, create_engine
 from .dependency_graph import DependencyGraph, create_dependency_graph
 from .godot_validator import GodotValidator, create_validator
+from .scene_graph_analyzer import SceneGraphAnalyzer, create_scene_analyzer
 from .code_fixer import CodeFixer, apply_fixes, fix_file
 from .gdscript_ast import GDScriptAST, SurgicalSplicer, CodeNode, NodeType
 
@@ -16,6 +17,7 @@ __all__ = [
     'EtherEngine', 'create_engine',
     'DependencyGraph', 'create_dependency_graph',
     'GodotValidator', 'create_validator',
+    'SceneGraphAnalyzer', 'create_scene_analyzer',
     'CodeFixer', 'apply_fixes', 'fix_file',
     'GDScriptAST', 'SurgicalSplicer', 'CodeNode', 'NodeType',
 ]

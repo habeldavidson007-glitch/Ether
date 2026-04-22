@@ -49,6 +49,9 @@ class EtherEngine:
         
         # Lazy initialization flag
         self._initialized = False
+        
+        # Scene graph analyzer (NEW - Step 3)
+        self._scene_graph_analyzer = None
     
     def _ensure_initialized(self):
         """Lazy-load core components on first use."""
@@ -86,6 +89,12 @@ class EtherEngine:
             self._godot_validator = GodotValidator()
         except ImportError:
             self._godot_validator = None
+        
+        try:
+            from core.scene_graph_analyzer import SceneGraphAnalyzer
+            self._scene_graph_analyzer = SceneGraphAnalyzer()
+        except ImportError:
+            self._scene_graph_analyzer = None
         
         self._initialized = True
     
@@ -137,6 +146,10 @@ class EtherEngine:
             # NEW: Build dependency graph
             if self._dependency_graph:
                 self._dependency_graph.load_project(str(project_dir))
+            
+            # NEW: Analyze scene graphs
+            if self._scene_graph_analyzer:
+                self._scene_graph_analyzer.analyze_project(str(project_dir))
             
             stats = self.project_stats
             message = f"✓ Project loaded: {stats['script_count']} scripts, {stats['scene_count']} scenes"
@@ -205,6 +218,11 @@ class EtherEngine:
         if self._godot_validator:
             validator_status = "Ready" if self._godot_validator.godot_path else "Godot executable not found"
         
+        # NEW: Add scene graph analyzer stats
+        scene_stats = {}
+        if self._scene_graph_analyzer:
+            scene_stats = self._scene_graph_analyzer.get_scene_stats()
+        
         return {
             'loaded': True,
             'project_path': self.project_path,
@@ -219,8 +237,10 @@ class EtherEngine:
             'has_static_analysis': self._static_analyzer is not None,
             'has_dependency_graph': self._dependency_graph is not None,
             'has_godot_validator': self._godot_validator is not None,
+            'has_scene_graph_analyzer': self._scene_graph_analyzer is not None,
             'validator_status': validator_status,
             'dependency_stats': dep_graph_stats,
+            'scene_stats': scene_stats,
         }
     
     def clear_history(self):
