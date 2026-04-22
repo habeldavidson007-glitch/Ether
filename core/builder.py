@@ -1603,6 +1603,10 @@ class EtherBrain:
         self.godot_validator = None   # NEW: Godot runtime validator
         self.scene_graph_analyzer = None  # NEW: Scene graph analyzer (Step 3)
         
+        # NEW: Initialize memory_core and cascade_scanner to None by default
+        self.memory_core = None
+        self.cascade_scanner = None
+        
         # NEW: Ether Brain Expansion - Librarian & Writer
         try:
             from .librarian import get_librarian
