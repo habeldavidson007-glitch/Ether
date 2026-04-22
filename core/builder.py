@@ -1664,6 +1664,26 @@ class EtherBrain:
                     self.scene_graph_analyzer.analyze_project(str(folder_path))
                 except Exception as e:
                     pass  # Optional feature, continue if it fails
+                
+                # NEW: Initialize Memory Core and Cascade Scanner
+                try:
+                    from core.memory_core import MemoryCore
+                    from core.cascade_scanner import CascadeScanner
+                    
+                    if isinstance(folder_path, Path):
+                        project_path = str(folder_path)
+                    else:
+                        project_path = folder_path
+                    
+                    self.memory_core = MemoryCore(project_path)
+                    self.cascade_scanner = CascadeScanner(
+                        self.dependency_graph,
+                        None,  # Will set static_analyzer if available
+                        self.memory_core
+                    )
+                except Exception as e:
+                    self.memory_core = None
+                    self.cascade_scanner = None
             
             return success, msg
         

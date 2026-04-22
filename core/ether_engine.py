@@ -96,6 +96,20 @@ class EtherEngine:
         except ImportError:
             self._scene_graph_analyzer = None
         
+        # NEW: Memory Core and Cascade Scanner for proactive learning
+        try:
+            from core.memory_core import MemoryCore
+            from core.cascade_scanner import CascadeScanner
+            self._memory_core = None  # Will be initialized on project load
+            self._cascade_scanner = CascadeScanner(
+                self._dependency_graph, 
+                self._static_analyzer, 
+                None  # Memory core will be set after initialization
+            )
+        except ImportError:
+            self._memory_core = None
+            self._cascade_scanner = None
+        
         self._initialized = True
     
     @property
@@ -150,6 +164,15 @@ class EtherEngine:
             # NEW: Analyze scene graphs
             if self._scene_graph_analyzer:
                 self._scene_graph_analyzer.analyze_project(str(project_dir))
+            
+            # NEW: Initialize Memory Core for this project
+            if self._memory_core is None and self.project_path:
+                from core.memory_core import MemoryCore
+                self._memory_core = MemoryCore(self.project_path)
+                
+                # Update cascade scanner with memory core
+                if self._cascade_scanner:
+                    self._cascade_scanner.memory_core = self._memory_core
             
             stats = self.project_stats
             message = f"✓ Project loaded: {stats['script_count']} scripts, {stats['scene_count']} scenes"
@@ -238,9 +261,12 @@ class EtherEngine:
             'has_dependency_graph': self._dependency_graph is not None,
             'has_godot_validator': self._godot_validator is not None,
             'has_scene_graph_analyzer': self._scene_graph_analyzer is not None,
+            'has_memory_core': self._memory_core is not None,
+            'has_cascade_scanner': self._cascade_scanner is not None,
             'validator_status': validator_status,
             'dependency_stats': dep_graph_stats,
             'scene_stats': scene_stats,
+            'memory_stats': self._memory_core.get_summary() if self._memory_core else {},
         }
     
     def clear_history(self):
@@ -312,6 +338,54 @@ class EtherEngine:
             return []
         
         return self._dependency_graph.get_circular_dependencies()
+    
+    def perform_cascade_scan(self, file_path: str, changes_made: List[str]) -> Optional[Any]:
+        """
+        Perform a cascade scan to detect potential breakages in dependent files.
+        
+        Args:
+            file_path: Path to the modified file
+            changes_made: List of changes applied
+            
+        Returns:
+            CascadeReport or None if scanner not available
+        """
+        self._ensure_initialized()
+        
+        if not self._cascade_scanner:
+            return None
+        
+        return self._cascade_scanner.scan(file_path, changes_made)
+    
+    def get_memory_summary(self) -> Dict:
+        """
+        Get memory core summary statistics.
+        
+        Returns:
+            Dictionary with memory statistics
+        """
+        self._ensure_initialized()
+        
+        if not self._memory_core:
+            return {}
+        
+        return self._memory_core.get_summary()
+    
+    def record_fix_in_memory(self, file_path: str, issues_fixed: List[str], 
+                             success: bool, context: Optional[Dict] = None):
+        """
+        Record a fix operation in memory for future learning.
+        
+        Args:
+            file_path: Path to the modified file
+            issues_fixed: List of issues that were fixed
+            success: Whether the fix was successful
+            context: Additional context about the fix
+        """
+        self._ensure_initialized()
+        
+        if self._memory_core:
+            self._memory_core.record_fix(file_path, issues_fixed, success, context)
     
     def validate_code(self, file_path: str, code: Optional[str] = None) -> Tuple[bool, List[str]]:
         """

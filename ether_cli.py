@@ -159,6 +159,15 @@ class EtherCLI:
                     scene_name = scene_path.split('/')[-1]
                     print(f"     • {scene_name} ({node_count} nodes)")
         
+        # NEW: Show Memory Core stats if available
+        if hasattr(self.brain, 'memory_core') and self.brain.memory_core:
+            memory_stats = self.brain.memory_core.get_summary()
+            print(f"\n🧠 Memory Core:")
+            print(f"  📚 Total Fixes:     {memory_stats.get('total_fixes', 0)}")
+            print(f"  🔍 Patterns:        {memory_stats.get('patterns_tracked', 0)}")
+            print(f"  📈 Success Rate:    {memory_stats.get('success_rate', 0)}%")
+            print(f"  💾 Files Tracked:   {memory_stats.get('files_tracked', 0)}")
+        
         print()
     
     def show_help(self):

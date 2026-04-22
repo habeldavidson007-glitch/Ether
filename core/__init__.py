@@ -8,6 +8,8 @@ from .godot_validator import GodotValidator, create_validator
 from .scene_graph_analyzer import SceneGraphAnalyzer, create_scene_analyzer
 from .code_fixer import CodeFixer, apply_fixes, fix_file
 from .gdscript_ast import GDScriptAST, SurgicalSplicer, CodeNode, NodeType
+from .memory_core import MemoryCore, create_memory_core
+from .cascade_scanner import CascadeScanner, create_cascade_scanner, CascadeReport, CascadeWarning
 
 __all__ = [
     'EtherSession', 'classify', 'is_casual', 'recall', 'remember',
@@ -20,4 +22,6 @@ __all__ = [
     'SceneGraphAnalyzer', 'create_scene_analyzer',
     'CodeFixer', 'apply_fixes', 'fix_file',
     'GDScriptAST', 'SurgicalSplicer', 'CodeNode', 'NodeType',
+    'MemoryCore', 'create_memory_core',
+    'CascadeScanner', 'create_cascade_scanner', 'CascadeReport', 'CascadeWarning',
 ]
