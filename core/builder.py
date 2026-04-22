@@ -1599,6 +1599,9 @@ class EtherBrain:
         self.history: List[Dict[str, str]] = []
         self.chat_mode = "mixed"
         self.last_optimized_code: Optional[str] = None  # Store last optimized code for /save command
+        self.dependency_graph = None  # NEW: Dependency graph for impact analysis
+        self.godot_validator = None   # NEW: Godot runtime validator
+        self.scene_graph_analyzer = None  # NEW: Scene graph analyzer (Step 3)
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -1638,6 +1641,49 @@ class EtherBrain:
             if success:
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+                
+                # NEW: Build dependency graph
+                try:
+                    from core.dependency_graph import DependencyGraph
+                    self.dependency_graph = DependencyGraph()
+                    self.dependency_graph.load_project(str(folder_path))
+                except Exception as e:
+                    pass  # Optional feature, continue if it fails
+                
+                # NEW: Initialize Godot validator
+                try:
+                    from core.godot_validator import GodotValidator
+                    self.godot_validator = GodotValidator()
+                except Exception as e:
+                    pass  # Optional feature, continue if it fails
+                
+                # NEW: Initialize scene graph analyzer (Step 3)
+                try:
+                    from core.scene_graph_analyzer import SceneGraphAnalyzer
+                    self.scene_graph_analyzer = SceneGraphAnalyzer()
+                    self.scene_graph_analyzer.analyze_project(str(folder_path))
+                except Exception as e:
+                    pass  # Optional feature, continue if it fails
+                
+                # NEW: Initialize Memory Core and Cascade Scanner
+                try:
+                    from core.memory_core import MemoryCore
+                    from core.cascade_scanner import CascadeScanner
+                    
+                    if isinstance(folder_path, Path):
+                        project_path = str(folder_path)
+                    else:
+                        project_path = folder_path
+                    
+                    self.memory_core = MemoryCore(project_path)
+                    self.cascade_scanner = CascadeScanner(
+                        self.dependency_graph,
+                        None,  # Will set static_analyzer if available
+                        self.memory_core
+                    )
+                except Exception as e:
+                    self.memory_core = None
+                    self.cascade_scanner = None
             
             return success, msg
         
@@ -1848,8 +1894,47 @@ class EtherBrain:
         Returns filename or None.
         """
         import re
-        match = re.search(r'(\w+\.gd)', query.lower())
+        match = re.search(r'([\w\-]+\.gd)', query.lower())
         return match.group(1) if match else None
+    
+    def _resolve_file_path(self, filename: str) -> Optional[str]:
+        """
+        Resolve a filename (e.g., 'game_data.gd') to its full relative path in the project.
+        Returns the resolved path or None if not found.
+        
+        Args:
+            filename: Simple filename or relative path
+            
+        Returns:
+            Full relative path within project, or None if not found
+        """
+        if not self.project_loader:
+            return None
+        
+        # If it's already a path with directories, try it directly
+        if '/' in filename or '\\' in filename:
+            # Normalize path separators
+            normalized = filename.replace('\\', '/')
+            if normalized in self.project_loader.file_index:
+                return normalized
+            # Try without leading slash
+            if normalized.startswith('/'):
+                normalized = normalized[1:]
+                if normalized in self.project_loader.file_index:
+                    return normalized
+        
+        # Search for exact filename match in file_index
+        filename_lower = filename.lower()
+        for path in self.project_loader.file_index.keys():
+            if path.lower().endswith(filename_lower):
+                return path
+        
+        # Also try matching just the basename
+        for path in self.project_loader.file_index.keys():
+            if Path(path).name.lower() == filename_lower:
+                return path
+        
+        return None
     
     def _classify_complex_intent(self, query: str) -> str:
         """
@@ -2019,7 +2104,7 @@ Write fixed code now:"""
         4. Auto-save to original file with backup
         
         Args:
-            file_path: Path to GDScript file to optimize
+            file_path: Path to GDScript file to optimize (filename or relative path)
             user_query: User's optimization request
             auto_save: If True, write optimized code back to original file with backup
             \n        Returns: Fixed code with explanation and LLM summary.
@@ -2027,6 +2112,11 @@ Write fixed code now:"""
         # STEP 1: Load Full File with Smart Context Management
         if not self.project_loader:
             return "No project loaded."
+        
+        # RESOLVE file_path: Convert filename to full relative path if needed
+        resolved_path = self._resolve_file_path(file_path)
+        if not resolved_path:
+            return f"Could not find file: {file_path}. Make sure the file exists in the loaded project."
         
         # Use smart context chunking for large files
         try:
@@ -2042,9 +2132,12 @@ Write fixed code now:"""
             prompt_optimizer = None
         
         # Load full code for fixer (needs complete context)
-        code = self.project_loader.get_content(file_path)
+        code = self.project_loader.get_content(resolved_path)
         if not code:
-            return "Could not load file."
+            return f"Could not load file: {resolved_path}"
+        
+        # Update file_path to resolved path for auto-save
+        file_path = resolved_path
         
         print(f"[DEBUG] Loaded full code length: {len(code)} chars ({len(code.splitlines())} lines)")
         
@@ -2063,69 +2156,23 @@ Write fixed code now:"""
 
         # STEP 3: Godot-Specific Python Fixer (deterministic, uses existing workspace files)
         try:
-            from .godot_fixer import GodotFixer
-            from .godot_explainer import GodotExplainer
+            from .code_fixer import CodeFixer
             
-            # Get path to existing workspace structure
-            base_dir = Path(__file__).parent.parent
-            workspace_path = base_dir / "workspace"
+            # Initialize fixer
+            fixer = CodeFixer()
+            fixed_code, applied_fixes = fixer.apply_all_fixes(code, issues)
             
-            # Verify workspace exists with required files
-            if not workspace_path.exists():
-                raise FileNotFoundError(f"Workspace not found: {workspace_path}")
-            
-            memory_path = workspace_path / "memory.json"
-            knowledge_dir = workspace_path / "knowledge"
-            
-            if not memory_path.exists():
-                print(f"[WARN] Memory file not found: {memory_path}, using defaults")
-            if not knowledge_dir.exists():
-                print(f"[WARN] Knowledge directory not found: {knowledge_dir}, using defaults")
-            
-            # Initialize fixer with existing workspace (no separate knowledge.json needed)
-            fixer = GodotFixer(str(workspace_path))
-            fixed_code, applied_fixes = fixer.apply_fixes(code, issues)
-            
-            # STEP 4: Godot Explainer - Compare and explain changes
-            explainer = GodotExplainer()
-            comparison = explainer.compare(code, fixed_code)
-            
+            # STEP 4: Explain changes (simple text-based comparison)
             print(f"[DEBUG] Python fixer applied {len(applied_fixes)} fixes")
-            print(f"[DEBUG] Explainer detected {comparison['lines_changed']} changes")
             
             # Build clean output: Summary + Change notification + Fixed code preview (background processing)
-            if comparison['lines_changed'] > 0 or len(applied_fixes) > 0:
+            if len(applied_fixes) > 0 or fixed_code != code:
                 # Create brief header with change count
-                lines_changed = comparison['lines_changed']
+                lines_changed = len(applied_fixes)
                 output_header = f"✓ Optimized: {lines_changed} improvement(s) made\n"
                 
                 # Add brief explanation (no LLM needed for simple fixes)
                 output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
-                
-                # Call LLM for summary with optimized prompt when there are ANY fixes
-                if len(applied_fixes) > 0:
-                    summary_prompt = explainer.get_summary_prompt(comparison)
-                    
-                    # Use prompt optimizer for small models
-                    if prompt_optimizer:
-                        print(f"[DEBUG] Optimizing prompt for small model...")
-                        summary_prompt = prompt_optimizer.optimize_for_task(
-                            'explain', 
-                            fixed_code[:500], 
-                            f"Summarize these changes: {', '.join(applied_fixes[:3])}"
-                        )
-                    
-                    print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
-                    
-                    _, llm_summary, _, _ = self._call_llm_with_retry_wrapper(
-                        summary_prompt,
-                        primary_model=self.primary_model,
-                        fallback_model=self.fallback_model,
-                        timeout=15
-                    )
-                    
-                    if llm_summary and llm_summary.strip():
-                        output_header += f"\n\n✨ {llm_summary.strip()}"
                 
                 # AUTO-SAVE with backup using SafeFileWriter
                 if auto_save:
@@ -2162,12 +2209,14 @@ Write fixed code now:"""
                     
                     # Store full code in brain for /save command
                     self.last_optimized_code = fixed_code
+                    self.last_optimized_file_path = file_path  # Track the file path
                     
-                    return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Full optimized code ready (use /save to export if needed)"
+                    return f"{output_header}\n\n```gdscript\n{preview_code}\n```\n\n💡 Code automatically saved to {file_path} (backup created)"
                 else:
                     # Small file, show all
                     # Store full code for /save command
                     self.last_optimized_code = fixed_code
+                    self.last_optimized_file_path = file_path  # Track the file path
                     return f"{output_header}\n\n```gdscript\n{fixed_code}\n```"
             else:
                 # No fixes applied - show small preview

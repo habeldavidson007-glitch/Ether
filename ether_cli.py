@@ -35,6 +35,7 @@ class EtherCLI:
         self.running = True
         self.project_path: Optional[str] = None
         self.last_optimized_code: Optional[str] = None  # Store last optimized code
+        self.last_optimized_file_path: Optional[str] = None  # Store path of last optimized file
         
         # Welcome message
         print("\n" + "=" * 70)
@@ -125,6 +126,48 @@ class EtherCLI:
         if cache_stats:
             print(f"  🗃 Cache:       {cache_stats.get('entries', 0)} entries")
         
+        # NEW: Show dependency graph stats if available
+        if hasattr(self.brain, 'dependency_graph') and self.brain.dependency_graph:
+            dep_stats = self.brain.dependency_graph.get_stats()
+            print(f"\n🔗 Dependency Graph:")
+            print(f"  🔗 Dependencies:  {dep_stats.get('total_dependencies', 0)}")
+            print(f"  ⚠ Circular Deps:  {dep_stats.get('circular_dependencies', 0)}")
+            
+            most_depended = dep_stats.get('most_depended_on', [])
+            if most_depended:
+                print(f"  📌 Most Used:")
+                for filepath, count in most_depended[:3]:
+                    filename = filepath.split('/')[-1]
+                    print(f"     • {filename} ({count} dependents)")
+        
+        # NEW: Show scene graph analyzer stats if available
+        if hasattr(self.brain, 'scene_graph_analyzer') and self.brain.scene_graph_analyzer:
+            scene_stats = self.brain.scene_graph_analyzer.get_scene_stats()
+            print(f"\n🎬 Scene Graph Analysis:")
+            print(f"  🎭 Total Scenes:    {scene_stats.get('total_scenes', 0)}")
+            print(f"  📦 Total Nodes:     {scene_stats.get('total_nodes', 0)}")
+            print(f"  📜 Script Attachments: {scene_stats.get('total_script_attachments', 0)}")
+            
+            issues = scene_stats.get('scenes_with_missing_resources', 0) + scene_stats.get('scenes_with_orphans', 0)
+            if issues > 0:
+                print(f"  ⚠ Issues Found:   {issues}")
+            
+            most_complex = scene_stats.get('most_complex_scenes', [])
+            if most_complex:
+                print(f"  🏗️ Most Complex:")
+                for scene_path, node_count in most_complex[:3]:
+                    scene_name = scene_path.split('/')[-1]
+                    print(f"     • {scene_name} ({node_count} nodes)")
+        
+        # NEW: Show Memory Core stats if available
+        if hasattr(self.brain, 'memory_core') and self.brain.memory_core:
+            memory_stats = self.brain.memory_core.get_summary()
+            print(f"\n🧠 Memory Core:")
+            print(f"  📚 Total Fixes:     {memory_stats.get('total_fixes', 0)}")
+            print(f"  🔍 Patterns:        {memory_stats.get('patterns_tracked', 0)}")
+            print(f"  📈 Success Rate:    {memory_stats.get('success_rate', 0)}%")
+            print(f"  💾 Files Tracked:   {memory_stats.get('files_tracked', 0)}")
+        
         print()
     
     def show_help(self):
@@ -199,7 +242,8 @@ class EtherCLI:
         
         elif cmd == '/save':
             if self.last_optimized_code:
-                save_path = arg if arg else "optimized_code.gd"
+                # Default to last optimized file path if available, otherwise use generic name
+                save_path = arg if arg else self.last_optimized_file_path or "optimized_code.gd"
                 try:
                     with open(save_path, 'w', encoding='utf-8') as f:
                         f.write(self.last_optimized_code)
@@ -241,6 +285,8 @@ class EtherCLI:
         # handle_optimize stores code in brain.last_optimized_code directly
         if hasattr(self.brain, 'last_optimized_code') and self.brain.last_optimized_code:
             self.last_optimized_code = self.brain.last_optimized_code
+        if hasattr(self.brain, 'last_optimized_file_path') and self.brain.last_optimized_file_path:
+            self.last_optimized_file_path = self.brain.last_optimized_file_path
         
         # If this is a build/debug response, show change summary first
         if isinstance(result, dict) and (result.get("type") == "build" or result.get("type") == "debug"):
