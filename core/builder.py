@@ -1600,6 +1600,7 @@ class EtherBrain:
         self.chat_mode = "mixed"
         self.last_optimized_code: Optional[str] = None  # Store last optimized code for /save command
         self.dependency_graph = None  # NEW: Dependency graph for impact analysis
+        self.godot_validator = None   # NEW: Godot runtime validator
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -1645,6 +1646,13 @@ class EtherBrain:
                     from core.dependency_graph import DependencyGraph
                     self.dependency_graph = DependencyGraph()
                     self.dependency_graph.load_project(str(folder_path))
+                except Exception as e:
+                    pass  # Optional feature, continue if it fails
+                
+                # NEW: Initialize Godot validator
+                try:
+                    from core.godot_validator import GodotValidator
+                    self.godot_validator = GodotValidator()
                 except Exception as e:
                     pass  # Optional feature, continue if it fails
             

@@ -205,3 +205,8 @@ class DependencyGraph:
         counts = [(f, len(deps)) for f, deps in self.dependents.items()]
         counts.sort(key=lambda x: x[1], reverse=True)
         return counts[:5]
+
+
+def create_dependency_graph() -> DependencyGraph:
+    """Factory function to create a DependencyGraph instance."""
+    return DependencyGraph()

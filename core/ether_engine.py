@@ -39,6 +39,7 @@ class EtherEngine:
         self._rag_engine = None
         self._static_analyzer = None
         self._dependency_graph = None  # NEW: Dependency graph engine
+        self._godot_validator = None   # NEW: Godot runtime validator
         
         self.project_path: Optional[str] = None
         self.project_stats: Dict[str, int] = {}
@@ -79,6 +80,12 @@ class EtherEngine:
             self._dependency_graph = DependencyGraph()
         except ImportError:
             self._dependency_graph = None
+        
+        try:
+            from core.godot_validator import GodotValidator
+            self._godot_validator = GodotValidator()
+        except ImportError:
+            self._godot_validator = None
         
         self._initialized = True
     
@@ -193,6 +200,11 @@ class EtherEngine:
         if self._dependency_graph:
             dep_graph_stats = self._dependency_graph.get_stats()
         
+        # NEW: Add validator status
+        validator_status = "Not available"
+        if self._godot_validator:
+            validator_status = "Ready" if self._godot_validator.godot_path else "Godot executable not found"
+        
         return {
             'loaded': True,
             'project_path': self.project_path,
@@ -206,6 +218,8 @@ class EtherEngine:
             'has_rag': self._rag_engine is not None,
             'has_static_analysis': self._static_analyzer is not None,
             'has_dependency_graph': self._dependency_graph is not None,
+            'has_godot_validator': self._godot_validator is not None,
+            'validator_status': validator_status,
             'dependency_stats': dep_graph_stats,
         }
     
@@ -278,6 +292,67 @@ class EtherEngine:
             return []
         
         return self._dependency_graph.get_circular_dependencies()
+    
+    def validate_code(self, file_path: str, code: Optional[str] = None) -> Tuple[bool, List[str]]:
+        """
+        Validate code against Godot engine before saving.
+        
+        Args:
+            file_path: Path to the script file
+            code: Optional code content to write before validation (for testing)
+            
+        Returns:
+            Tuple of (is_valid: bool, messages: List[str])
+        """
+        self._ensure_initialized()
+        
+        if not self._godot_validator:
+            return True, ["⚠ Godot validator not available - skipping runtime validation"]
+        
+        # If code is provided, write it temporarily for validation
+        if code:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(code)
+            except Exception as e:
+                return False, [f"❌ Error writing temporary file: {e}"]
+        
+        # Validate the script
+        return self._godot_validator.validate_script(file_path, self.project_path)
+    
+    def validate_scene(self, scene_path: str) -> Tuple[bool, List[str]]:
+        """
+        Validate a Godot scene file.
+        
+        Args:
+            scene_path: Path to the .tscn file
+            
+        Returns:
+            Tuple of (is_valid: bool, messages: List[str])
+        """
+        self._ensure_initialized()
+        
+        if not self._godot_validator:
+            return True, ["⚠ Godot validator not available - skipping runtime validation"]
+        
+        return self._godot_validator.validate_scene(scene_path, self.project_path)
+    
+    def validate_autoload(self, autoload_name: str) -> Tuple[bool, List[str]]:
+        """
+        Validate that an autoload is properly configured.
+        
+        Args:
+            autoload_name: Name of the autoload (e.g., "GameData")
+            
+        Returns:
+            Tuple of (is_valid: bool, messages: List[str])
+        """
+        self._ensure_initialized()
+        
+        if not self._godot_validator or not self.project_path:
+            return True, ["⚠ Godot validator not available or project not loaded"]
+        
+        return self._godot_validator.validate_autoload(autoload_name, self.project_path)
 
 
 # Convenience function for simple imports
