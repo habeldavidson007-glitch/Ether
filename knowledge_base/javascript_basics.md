@@ -2,31 +2,13 @@
 Updated: 2026-04-22
 
 ## JavaScript Core
+- `let`/`const`, arrow functions, template literals
+- Destructuring and spread operator for concise code
+- `async/await` for readable asynchronous flows
 
-### Modern ES6+ Features
-- let/const for variable declaration
-- Arrow functions: () => {}
-- Template literals: `Hello ${name}`
-- Destructuring: const {x, y} = point
-- Spread operator: [...array1, ...array2]
-- Async/await for promises
+## TypeScript Benefits
+- Types and interfaces improve maintainability
+- Generics enable reusable, safe abstractions
 
-### DOM Manipulation
-```javascript
-const element = document.querySelector('.my-class');
-element.addEventListener('click', (e) => {
-    console.log('Clicked!', e.target);
-});
-```
-
-### TypeScript Advantages
-- Static typing for fewer runtime errors
-- Interfaces and type aliases
-- Generics for reusable code
-- Better IDE support
-
-### Common Patterns
-- Module pattern for encapsulation
-- Promises/Fetch for async operations
-- Event-driven architecture
-- Functional programming concepts
+## Topic Index
+babel, bigint, bundler, closure, debounce, domtokenlist, eslint, fetchapi, hoisting, immutability, interop, jest, jsx, keyof, memoization, microtask, nodejs, nullish, overload, pnpm, promiseall, prototypechain, regexp, sourcemap, tree_shaking, tsconfig, uniontype, vite, webpack, websocket

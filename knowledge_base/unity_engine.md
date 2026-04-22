@@ -2,33 +2,16 @@
 Updated: 2026-04-22
 
 ## Core Concepts
-
-### GameObjects and Components
 - GameObjects are containers
 - Components add functionality (MonoBehaviour)
 - Component-based architecture
 
-### MonoBehaviour Lifecycle
-```csharp
-void Awake() { }      // Initialization
-void Start() { }      // Before first frame
-void Update() { }     // Every frame
-void FixedUpdate() { } // Physics step
-void OnDestroy() { }  // Cleanup
-```
+## MonoBehaviour Lifecycle
+`Awake` → `Start` → `Update`/`FixedUpdate` → `OnDestroy`
 
-### Scripting in C#
-- Strongly typed, compiled language
-- Garbage collected
-- Extensive standard library
-- LINQ for data manipulation
+## Physics Basics
+- Rigidbody for simulation
+- Colliders and triggers for interaction
 
-### Asset Pipeline
-- Import models, textures, audio
-- Prefabs for reusable objects
-- ScriptableObjects for data assets
-
-### Physics System
-- Rigidbody for physics simulation
-- Colliders for collision detection
-- Triggers for overlap events
+## Topic Index
+addressables, animatorcontroller, assemblydefinition, burstcompiler, cinemachine, commandbuffer, dotween, ecs, gameview, gizmos, inputsystem, jobsystem, lightprobe, navmeshagent, objectpool, particlegraph, prefabvariant, profiler, rendertexture, scriptableobject, serialization, shadersgraph, spriteatlas, timeline, ui_toolkit

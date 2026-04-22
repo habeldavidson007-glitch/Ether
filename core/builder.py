@@ -34,6 +34,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from core.librarian import get_librarian
+from core.writer import get_writer
 
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
@@ -1605,6 +1607,8 @@ class EtherBrain:
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
+        self.librarian = get_librarian()
+        self.writer = get_writer()
     
     def load_project_from_zip(self, zip_data: bytes) -> Tuple[bool, str]:
         """
@@ -1759,6 +1763,7 @@ class EtherBrain:
             
             # Get context lazily (only loads relevant files)
             context = ""
+            kb_context = ""
             if self.project_loader:
                 step("📂 Loading relevant files...")
                 # SMART CONTEXT LOADING - Adaptive based on intent type
@@ -1774,6 +1779,13 @@ class EtherBrain:
                 
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
+            # Pull knowledge-base context for every complex turn
+            kb_context = self.librarian.retrieve(query, mode=self.chat_mode, max_chunks=3)
+            if kb_context:
+                if context:
+                    context = f"{kb_context}\n\n{context}"
+                else:
+                    context = kb_context
             
             # Add memory context if available
             memory_context = self._get_memory_context(query)
@@ -1802,6 +1814,11 @@ class EtherBrain:
                     else:
                         # Fallback if static analysis couldn't run
                         text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    text = self.writer.format_response(
+                        text,
+                        format_type="explanation",
+                        title="Project Analysis",
+                    )
                     
                     # Cache the result
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
@@ -1882,6 +1899,7 @@ class EtherBrain:
                 try:
                     text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
                                "", chat_mode=self.chat_mode)
+                    text = self.writer.enhance_chat_response(text, kb_context)
                     # Cache chat responses too
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log

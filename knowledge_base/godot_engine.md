@@ -10,33 +10,13 @@ Everything in Godot is a Node. Nodes are the building blocks of your game.
 - Common nodes: Node2D, Node3D, Control, Sprite, CharacterBody2D/3D
 
 ### GDScript Basics
-GDScript is Python-like language designed for Godot.
-```gdscript
-extends Node2D
-
-@export var speed: float = 100.0
-
-func _process(delta: float):
-    position += Vector2.RIGHT * speed * delta
-```
+Use typed variables and small functions for readability and performance.
 
 ### Signals
-Godot's observer pattern implementation for loose coupling.
-```gdscript
-signal health_changed(new_value: int)
-
-func take_damage(amount: int):
-    health -= amount
-    emit_signal("health_changed", health)
-```
+Signals support observer-style decoupling for UI, gameplay, and event systems.
 
 ### Autoloads (Singletons)
-Global scripts accessible from anywhere in the project.
-- Add via Project -> Project Settings -> Autoload
-- Use for game state, managers, utilities
+Project-wide scripts for global state, managers, and utility helpers.
 
-## Best Practices
-- Use composition over inheritance
-- Keep scenes small and reusable
-- Use type hints for better performance
-- Organize code with meaningful function names
+### Topic Index
+animationtree, area2d, camera2d, callable, classdb, collisionlayer, collisionmask, commandline, customresource, debugdraw, editorplugin, enginehint, fileaccess, filesystemdock, gdextension, gdscript, inputmap, json, navigationagent, packedscene, pathfollow, physicsserver, projectsettings, raycast, resourceuid, scenetree, shader, signalbus, statemachine, tilemap, viewport, visualshader

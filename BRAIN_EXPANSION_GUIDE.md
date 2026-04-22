@@ -33,7 +33,7 @@ ether/
 ├── core/
 │   ├── librarian.py      # Context retrieval
 │   ├── writer.py         # Response formatting
-│   └── builder.py        # Main orchestrator (to be integrated)
+│   └── builder.py        # Main orchestrator (integrated with Librarian/Writer loop)
 ├── courier/
 │   └── fetcher.py        # Knowledge updater
 ├── knowledge_base/       # Auto-generated knowledge files
@@ -171,11 +171,11 @@ print(chat)
 
 ## 🔮 Next Steps
 
-1. **Integrate into builder.py** - Connect Librarian/Writer to main flow
-2. **Add Memory Core** - Record successful fixes for pattern learning
-3. **Expand Knowledge** - Add more sources to Courier
-4. **Custom Templates** - Create Godot-specific response formats
-5. **Cross-Pollination** - Enable "Compare Godot vs Unity" queries
+1. **Add Memory Core Enhancements** - Record successful fixes for stronger pattern learning
+2. **Expand Knowledge** - Add project-specific and domain-specific sources to Courier
+3. **Custom Templates** - Create Godot-specific response formats
+4. **Cross-Pollination** - Enable "Compare Godot vs Unity" queries
+5. **Template Metrics** - Track which output formats perform best by query type
 
 ## 💡 Pro Tips
 
@@ -187,6 +187,6 @@ print(chat)
 
 ---
 
-**Status**: ✅ Foundation Complete | ⏳ Integration Pending
+**Status**: ✅ Foundation + Integration Complete
 **RAM Usage**: <10MB total overhead
 **Ready for**: Production integration into Ether CLI
