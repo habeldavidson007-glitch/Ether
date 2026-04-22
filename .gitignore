@@ -1,4 +1,11 @@
 ```
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Build directories
+build/
+dist/
 ```

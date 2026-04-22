@@ -2012,30 +2012,51 @@ Write fixed code now:"""
 
     def handle_optimize(self, file_path: str, user_query: str, auto_save: bool = False) -> str:
         """
-        Fused Optimization Pipeline v1.9.9 (3-Step Hybrid Python+LLM + Auto-Save):
+        Fused Optimization Pipeline v1.9.9 (3-Step Hybrid Python+LLM + Auto-Save + Smart Context):
         1. GodotFixer applies deterministic fixes (unlimited chars)
         2. GodotExplainer compares and explains changes
-        3. LLM Summarizer generates brief summary (≤600 chars)
-        4. Auto-save to original file if requested
+        3. LLM Summarizer with optimized prompts for small models
+        4. Auto-save to original file with backup
         
         Args:
             file_path: Path to GDScript file to optimize
             user_query: User's optimization request
-            auto_save: If True, write optimized code back to original file
-            
-        Returns: Fixed code with explanation and LLM summary.
+            auto_save: If True, write optimized code back to original file with backup
+            \n        Returns: Fixed code with explanation and LLM summary.
         """
-        # STEP 1: Load Full File (GodotFixer needs complete context for unused var detection)
+        # STEP 1: Load Full File with Smart Context Management
         if not self.project_loader:
             return "No project loaded."
         
-        # Use get_content - DO NOT truncate, fixer needs full file to detect unused vars correctly
+        # Use smart context chunking for large files
+        try:
+            from .context_manager import ContextChunker, FileBackupManager
+            from .prompt_optimizer import PromptOptimizer
+            
+            chunker = ContextChunker(max_chunk_size=600)
+            prompt_optimizer = PromptOptimizer(model_size='small')
+            
+        except ImportError as e:
+            print(f"[WARN] New modules not available: {e}, using fallback")
+            chunker = None
+            prompt_optimizer = None
+        
+        # Load full code for fixer (needs complete context)
         code = self.project_loader.get_content(file_path)
         if not code:
             return "Could not load file."
         
         print(f"[DEBUG] Loaded full code length: {len(code)} chars ({len(code.splitlines())} lines)")
-
+        
+        # For very large files, use smart chunking for LLM prompts
+        if len(code) > 10000:  # If file is very large
+            print(f"[DEBUG] Large file detected - using smart context chunking")
+            if chunker:
+                # Get most relevant context for the query
+                relevant_context = chunker.get_context_for_query(file_path, user_query, max_context_chars=600)
+                if relevant_context:
+                    print(f"[DEBUG] Extracted {len(relevant_context)} chars of relevant context")
+        
         # STEP 2: Static Analysis on FULL code (Instant)
         issues = lightweight_analyzer(code)
         print(f"[DEBUG] Detected issues: {issues}")
@@ -2081,9 +2102,19 @@ Write fixed code now:"""
                 # Add brief explanation (no LLM needed for simple fixes)
                 output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
                 
-                # Call LLM for summary when there are ANY fixes (not just >3)
+                # Call LLM for summary with optimized prompt when there are ANY fixes
                 if len(applied_fixes) > 0:
                     summary_prompt = explainer.get_summary_prompt(comparison)
+                    
+                    # Use prompt optimizer for small models
+                    if prompt_optimizer:
+                        print(f"[DEBUG] Optimizing prompt for small model...")
+                        summary_prompt = prompt_optimizer.optimize_for_task(
+                            'explain', 
+                            fixed_code[:500], 
+                            f"Summarize these changes: {', '.join(applied_fixes[:3])}"
+                        )
+                    
                     print(f"[DEBUG] LLM Summary prompt length: {len(summary_prompt)} chars")
                     
                     _, llm_summary, _, _ = self._call_llm_with_retry_wrapper(
@@ -2096,15 +2127,19 @@ Write fixed code now:"""
                     if llm_summary and llm_summary.strip():
                         output_header += f"\n\n✨ {llm_summary.strip()}"
                 
-                # AUTO-SAVE: Write optimized code back to original file if requested
+                # AUTO-SAVE with backup using SafeFileWriter
                 if auto_save:
                     try:
-                        # Resolve absolute path
-                        abs_path = Path(file_path).resolve()
-                        with open(abs_path, 'w', encoding='utf-8') as f:
-                            f.write(fixed_code)
-                        output_header += f"\n\n✓ Auto-saved to: {abs_path}"
-                        print(f"[DEBUG] Auto-saved optimized code to {abs_path}")
+                        # Import SafeFileWriter for safe in-place modification with backup
+                        from .file_writer import SafeFileWriter
+                        
+                        writer = SafeFileWriter()
+                        success, message = writer.write(file_path, fixed_code, create_backup=True)
+                        if success:
+                            output_header += f"\n\n✓ Auto-saved to: {file_path} (backup created)"
+                            print(f"[DEBUG] {message}")
+                        else:
+                            output_header += f"\n⚠ Auto-save failed: {message}"
                     except Exception as save_error:
                         output_header += f"\n⚠ Auto-save failed: {save_error}"
                         print(f"[DEBUG] Auto-save error: {save_error}")
