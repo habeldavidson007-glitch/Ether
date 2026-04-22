@@ -38,6 +38,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 # Trinity Architecture Imports
 from .unified_search import get_unified_search
 from .adaptive_memory import get_adaptive_memory
+from .safety_preview import get_safety_preview
+from .feedback_commands import get_feedback_manager
 
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
@@ -1615,6 +1617,10 @@ class EtherBrain:
         self.search_engine = None
         self.memory = None
         
+        # Safety Preview & Feedback Manager (NEW - Safe Code Application)
+        self.safety_preview = get_safety_preview()
+        self.feedback_manager = get_feedback_manager()
+        
         # NEW: Ether Brain Expansion - Librarian & Writer
         try:
             from .librarian import get_librarian
@@ -2286,19 +2292,38 @@ Write fixed code now:"""
                 else:
                     output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
                 
-                # AUTO-SAVE with backup using SafeFileWriter
+                # AUTO-SAVE with backup using SafetyPreview (NEW - Safe Mode)
                 if auto_save:
                     try:
-                        # Import SafeFileWriter for safe in-place modification with backup
-                        from .file_writer import SafeFileWriter
+                        # Get pending changes for preview
+                        changes = self.safety_preview.get_pending_changes(file_path, fixed_code)
                         
-                        writer = SafeFileWriter()
-                        success, message = writer.write(file_path, fixed_code, create_backup=True)
-                        if success:
-                            output_header += f"\n\n✓ Auto-saved to: {file_path} (backup created)"
-                            print(f"[DEBUG] {message}")
+                        if changes['stats']['total_changes'] > 0:
+                            # Store interaction for feedback
+                            self.feedback_manager.store_pending_interaction(
+                                query=user_query,
+                                original_code=code[:2000],
+                                suggested_fix=fixed_code[:2000],
+                                file_path=file_path,
+                                error_type=", ".join(issues) if issues else "optimization",
+                                metadata={
+                                    "original_lines": len(code.splitlines()),
+                                    "fixed_lines": len(fixed_code.splitlines()),
+                                    "fixes_applied": len(applied_fixes),
+                                    "auto_saved": auto_save
+                                }
+                            )
+                            
+                            # Apply safely with backup
+                            success, message = self.safety_preview.apply_safely(file_path, fixed_code, force=False)
+                            if success:
+                                output_header += f"\n\n✓ {message}"
+                                print(f"[DEBUG] {message}")
+                            else:
+                                output_header += f"\n⚠ Auto-save failed: {message}"
                         else:
-                            output_header += f"\n⚠ Auto-save failed: {message}"
+                            output_header += f"\n\nℹ No meaningful changes to save."
+                            
                     except Exception as save_error:
                         output_header += f"\n⚠ Auto-save failed: {save_error}"
                         print(f"[DEBUG] Auto-save error: {save_error}")

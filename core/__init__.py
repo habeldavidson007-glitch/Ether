@@ -12,6 +12,8 @@ from .unified_search import get_unified_search
 from .adaptive_memory import get_adaptive_memory
 from .librarian import get_librarian
 from .writer import get_writer
+from .safety_preview import get_safety_preview
+from .feedback_commands import get_feedback_manager
 
 __all__ = [
     'EtherSession', 'classify', 'is_casual', 'recall', 'remember', 'ContextChunker', 'smart_load_context',

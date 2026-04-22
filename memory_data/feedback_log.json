@@ -1,7 +1,7 @@
 [
   {
     "id": "80a4e9eef75f",
-    "timestamp": "2026-04-22T17:20:36.613953",
+    "timestamp": "2026-04-22T17:26:36.937428",
     "query": "test optimization",
     "file_path": "test.gd",
     "error_type": "",
@@ -17,7 +17,7 @@
   },
   {
     "id": "82fd6439bed1",
-    "timestamp": "2026-04-22T17:20:36.614346",
+    "timestamp": "2026-04-22T17:26:36.937668",
     "query": "test query",
     "file_path": "test.gd",
     "error_type": "",
@@ -33,7 +33,7 @@
   },
   {
     "id": "0b74bc12440f",
-    "timestamp": "2026-04-22T17:20:36.614384",
+    "timestamp": "2026-04-22T17:26:36.937686",
     "query": "test query",
     "file_path": "test.gd",
     "error_type": "",
@@ -49,7 +49,7 @@
   },
   {
     "id": "916a75ed7f70",
-    "timestamp": "2026-04-22T17:20:36.614396",
+    "timestamp": "2026-04-22T17:26:36.937696",
     "query": "test via builder",
     "file_path": "test.gd",
     "error_type": "",
@@ -65,7 +65,7 @@
   },
   {
     "id": "e6a5b7f786bf",
-    "timestamp": "2026-04-22T17:20:36.638436",
+    "timestamp": "2026-04-22T17:26:36.937703",
     "query": "optimize movement",
     "file_path": "player.gd",
     "error_type": "",
@@ -74,6 +74,58 @@
       "file_extension": ".gd",
       "error_type": "general",
       "query_length": 17,
+      "code_lines": 1,
+      "fix_lines": 1,
+      "keywords": []
+    }
+  },
+  {
+    "id": "1ed0548a53a3",
+    "timestamp": "2026-04-22T17:26:36.937711",
+    "query": "Optimize this function",
+    "file_path": "test.gd",
+    "error_type": "optimization",
+    "feedback": "accepted",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "optimization",
+      "query_length": 22,
+      "code_lines": 1,
+      "fix_lines": 1,
+      "keywords": []
+    }
+  },
+  {
+    "id": "b209ce75beb3",
+    "timestamp": "2026-04-22T17:26:36.937862",
+    "query": "Optimize this function",
+    "file_path": "test.gd",
+    "error_type": "optimization",
+    "feedback": "accepted",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "optimization",
+      "query_length": 22,
+      "code_lines": 3,
+      "fix_lines": 2,
+      "keywords": [
+        "return",
+        "var",
+        "func"
+      ]
+    }
+  },
+  {
+    "id": "8f250ce96a1f",
+    "timestamp": "2026-04-22T17:26:36.938295",
+    "query": "Fix bug",
+    "file_path": "player.gd",
+    "error_type": "bugfix",
+    "feedback": "rejected",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "bugfix",
+      "query_length": 7,
       "code_lines": 1,
       "fix_lines": 1,
       "keywords": [

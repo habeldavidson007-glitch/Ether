@@ -54,5 +54,18 @@
       "success_count": 1,
       "last_used": "2026-04-22T17:20:36.638436"
     }
+  ],
+  "optimization_.gd": [
+    {
+      "query_pattern": "Optimize this function",
+      "keywords": [
+        "func",
+        "var",
+        "return"
+      ],
+      "fix_preview": "func test():\n    return 1",
+      "success_count": 2,
+      "last_used": "2026-04-22T17:26:36.937862"
+    }
   ]
 }

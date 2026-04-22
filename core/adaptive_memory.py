@@ -234,6 +234,7 @@ class AdaptiveMemory:
             "rejected": self.total_rejected,
             "success_rate": f"{self.success_rate:.1f}%",
             "pattern_categories": len(self.learned_patterns),
+            "total_patterns": sum(len(p) for p in self.learned_patterns.values()),
             "conversation_turns": len(self.conversation_history)
         }
 
