@@ -1,0 +1,13 @@
+{
+  "last_check": "2026-04-22T16:10:33.538721",
+  "last_update": "2026-04-22T16:02:41.476268",
+  "fetch_hashes": {
+    "godot_engine": "af8711bdeb1c3346c756d3d4cd6fdb1d1f1d1ae0b70767fc823ec5ad79092769",
+    "cpp_basics": "cccd3940317fd40faa3cb16f88e08adc622b2e05df540f60d9bba62675b2c25b",
+    "unreal_engine": "83f6c640d350fb76b60ee1815715727b9542e838cee7631361e3398fb388eeb4",
+    "unity_engine": "10d7bf3a30bcc613dccdde923e6bea3547e5fee2c56833870ea6069e3631e940",
+    "javascript_basics": "90f6de2ec8827cd041d3f8935a98627f051c9beaa215f62e5815554e0e0590a7",
+    "design_patterns": "8ce769cdde4682d23695482af61a288c04a1903e34f7d1158a92d4238534787a",
+    "general_facts": "fed64af574f31abde401b720caa1c00e48195038655c5994ce42afaf46becd31"
+  }
+}

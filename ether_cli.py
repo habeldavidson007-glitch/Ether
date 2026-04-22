@@ -181,6 +181,10 @@ class EtherCLI:
     /status           Show current project statistics
     /mode <name>      Switch chat mode: coding, general, or mixed
     /clear            Clear chat history and cache
+    /save [path]      Save last optimized code to file
+    /accept           Mark last optimization as helpful (trains Ether)
+    /reject [reason]  Mark last optimization as bad (trains Ether)
+    /feedback status  Show learning statistics
     /help             Show this help message
     /quit             Exit Ether
   
@@ -192,6 +196,8 @@ class EtherCLI:
   EXAMPLES:
     /load C:/Users/Name/GodotProjects/MyGame
     /mode coding
+    optimize player.gd
+    /accept
     How do I implement player movement?
     What's the best way to structure my game states?
   
@@ -199,6 +205,7 @@ class EtherCLI:
     • Be specific about what you need
     • Mention file names for targeted analysis
     • Use /mode to switch between coding and design focus
+    • Use /accept or /reject after optimizations to help Ether learn!
 """)
         print("-" * 70 + "\n")
     
@@ -252,6 +259,23 @@ class EtherCLI:
                     print(f"❌ Error saving file: {e}\n")
             else:
                 print("❌ No optimized code to save. Run 'optimize <file>' first.\n")
+        
+        # NEW: Feedback Commands for Self-Learning
+        elif cmd == '/accept':
+            result = self.brain.feedback_manager.accept_last()
+            print(f"\n{result}\n")
+            
+        elif cmd == '/reject':
+            reason = arg.strip() if arg else ""
+            result = self.brain.feedback_manager.reject_last(reason)
+            print(f"\n{result}\n")
+            
+        elif cmd == '/feedback':
+            if arg and arg.strip().lower() == 'status':
+                result = self.brain.feedback_manager.get_feedback_status()
+                print(f"\n{result}\n")
+            else:
+                print("\nUsage:\n  /accept           - Mark last optimization as helpful\n  /reject [reason]  - Mark last optimization as bad\n  /feedback status  - Show learning statistics\n")
         
         elif cmd == '/help':
             self.show_help()

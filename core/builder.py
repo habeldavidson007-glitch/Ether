@@ -35,6 +35,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+# Trinity Architecture Imports
+from .unified_search import get_unified_search
+from .adaptive_memory import get_adaptive_memory
+from .safety_preview import get_safety_preview
+from .feedback_commands import get_feedback_manager
+
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
 # Converts vague user requests into atomic, bounded instructions for LLM
@@ -1602,6 +1608,29 @@ class EtherBrain:
         self.dependency_graph = None  # NEW: Dependency graph for impact analysis
         self.godot_validator = None   # NEW: Godot runtime validator
         self.scene_graph_analyzer = None  # NEW: Scene graph analyzer (Step 3)
+        
+        # NEW: Initialize memory_core and cascade_scanner to None by default
+        self.memory_core = None
+        self.cascade_scanner = None
+        
+        # Trinity Architecture: Unified Search & Adaptive Memory (initialized on project load)
+        self.search_engine = None
+        self.memory = None
+        
+        # Safety Preview & Feedback Manager (NEW - Safe Code Application)
+        self.safety_preview = get_safety_preview()
+        self.feedback_manager = get_feedback_manager()
+        
+        # NEW: Ether Brain Expansion - Librarian & Writer
+        try:
+            from .librarian import get_librarian
+            from .writer import get_writer
+            self.librarian = get_librarian()
+            self.writer = get_writer()
+        except Exception as e:
+            self.librarian = None
+            self.writer = None
+        
         # Model configuration for 2-step thinking engine
         self.primary_model = PRIMARY_MODEL
         self.fallback_model = FALLBACK_MODEL
@@ -1665,23 +1694,25 @@ class EtherBrain:
                 except Exception as e:
                     pass  # Optional feature, continue if it fails
                 
-                # NEW: Initialize Memory Core and Cascade Scanner
+                # NEW: Initialize Unified Search and Adaptive Memory (Trinity Architecture)
                 try:
-                    from core.memory_core import MemoryCore
-                    from core.cascade_scanner import CascadeScanner
+                    from core.unified_search import get_unified_search
+                    from core.adaptive_memory import get_adaptive_memory
                     
                     if isinstance(folder_path, Path):
                         project_path = str(folder_path)
                     else:
                         project_path = folder_path
                     
-                    self.memory_core = MemoryCore(project_path)
-                    self.cascade_scanner = CascadeScanner(
-                        self.dependency_graph,
-                        None,  # Will set static_analyzer if available
-                        self.memory_core
-                    )
+                    self.search_engine = get_unified_search(project_path)
+                    self.memory = get_adaptive_memory()
+                    
+                    # Legacy compatibility
+                    self.memory_core = self.memory
+                    self.cascade_scanner = None  # Deprecated in favor of unified search
                 except Exception as e:
+                    self.search_engine = None
+                    self.memory = None
                     self.memory_core = None
                     self.cascade_scanner = None
             
@@ -1775,10 +1806,39 @@ class EtherBrain:
                 self.project_stats = self.project_loader.get_stats()
                 self.project_fingerprint = get_project_fingerprint(self.project_loader.file_index)
             
-            # Add memory context if available
-            memory_context = self._get_memory_context(query)
-            if memory_context:
-                context = memory_context + "\n\n" + context
+            # NEW: Trinity Architecture - Unified Search & Adaptive Memory
+            if self.search_engine:
+                # Hybrid search across project code + knowledge base
+                step("🔍 Unified search (project + knowledge)...")
+                search_results = self.search_engine.search(query, mode="hybrid", top_k=3)
+                if search_results:
+                    # Format search results as context
+                    context_parts = []
+                    for result in search_results:
+                        if 'content' in result:
+                            source = result.get('source', 'Unknown')
+                            context_parts.append(f"# From {source}:\n{result['content'][:500]}")
+                    
+                    if context_parts:
+                        kb_context = "\n\n".join(context_parts)
+                        step(f"📚 Retrieved {len(search_results)} relevant contexts")
+                        if context:
+                            context = kb_context + "\n\n" + context
+                        else:
+                            context = kb_context
+            
+            # NEW: Adaptive Memory - Get learning context from past feedback
+            if self.memory:
+                step("🧠 Adaptive memory retrieval...")
+                # Get file path if available
+                file_path = ""
+                filename_match = re.search(r'([\w\-]+\.gd)', query.lower())
+                if filename_match and self.project_loader:
+                    file_path = filename_match.group(1)
+                
+                learning_context = self.memory.get_learning_context(query, file_path)
+                if learning_context:
+                    context = learning_context + "\n\n" + context
             
             # Run appropriate pipeline with PIPELINE REORDERING (v1.9 FIX)
             # KEY: File-specific tasks use scoped_loader, NOT global analyzer
@@ -1792,6 +1852,9 @@ class EtherBrain:
                     if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
                         from core.static_analyzer import StaticAnalyzer
                         analyzer = StaticAnalyzer()
+                        # Disable auto-fix during analysis mode to prevent unwanted modifications
+                        import os
+                        os.environ['ETHER_AUTO_FIX'] = 'false'
                         static_report = analyzer.analyze(str(self.project_loader._base_path))
                         step(f"⚡ Static analysis complete ({analyzer.files_scanned} files)")
                     
@@ -1802,6 +1865,10 @@ class EtherBrain:
                     else:
                         # Fallback if static analysis couldn't run
                         text = analyze(query, context, self.history, chat_mode=self.chat_mode)
+                    
+                    # NEW: Enhance response with Writer if available
+                    if self.writer:
+                        text = self.writer.format_response(text, format_type="explanation", title="Project Analysis")
                     
                     # Cache the result
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
@@ -1882,6 +1949,11 @@ class EtherBrain:
                 try:
                     text = chat(query, self.history[-4:] if len(self.history) >= 4 else self.history, 
                                "", chat_mode=self.chat_mode)
+                    
+                    # NEW: Enhance chat response with Writer if available
+                    if self.writer and context:
+                        text = self.writer.enhance_chat_response(text, context)
+                    
                     # Cache chat responses too
                     _response_cache.set(query, complex_intent, self.project_fingerprint, text)
                     return {"type": "chat", "text": text}, log
@@ -1976,7 +2048,7 @@ class EtherBrain:
     def _get_memory_context(self, query: str) -> str:
         """Get relevant past interactions from memory."""
         try:
-            from core.state import recall
+            from .context_manager import recall
             hits = recall(query)
             if not hits:
                 return ""
@@ -2112,11 +2184,11 @@ Write fixed code now:"""
             
         Returns: Fixed code with explanation and LLM summary.
         """
-        # STEP 0: Check Memory for Similar Past Fixes (NEW - Learning from History)
-        if self.memory_core:
-            code_hash = self.memory_core._hash_code(user_query + file_path)
-            similar_fixes = self.memory_core.get_similar_fixes(file_path, code_hash)
-            recurring_issues = self.memory_core.get_recurring_issues(file_path)
+        # STEP 0: Check Adaptive Memory for Similar Past Fixes (NEW - Learning from History)
+        if self.memory:
+            code_hash = self.memory._hash_code(user_query + file_path)
+            similar_fixes = self.memory.get_similar_fixes(file_path, code_hash)
+            recurring_issues = self.memory.get_recurring_issues(file_path)
             
             if similar_fixes:
                 print(f"[DEBUG] Memory found {len(similar_fixes)} similar past fixes")
@@ -2164,7 +2236,10 @@ Write fixed code now:"""
                 if relevant_context:
                     print(f"[DEBUG] Extracted {len(relevant_context)} chars of relevant context")
         
-        # STEP 2: Static Analysis on FULL code (Instant)
+        # STEP 2: Static Analysis on FULL code (Instant) - DISABLE AUTO-FIX
+        # Temporarily disable auto-fix during handle_optimize to prevent double-fixing
+        import os
+        os.environ['ETHER_AUTO_FIX'] = 'false'
         issues = lightweight_analyzer(code)
         print(f"[DEBUG] Detected issues: {issues}")
 
@@ -2217,22 +2292,52 @@ Write fixed code now:"""
                 else:
                     output_header += "\n".join([f"  • {fix}" for fix in applied_fixes[:5]])  # Limit to 5
                 
-                # AUTO-SAVE with backup using SafeFileWriter
+                # AUTO-SAVE with backup using SafetyPreview (NEW - Safe Mode)
                 if auto_save:
                     try:
-                        # Import SafeFileWriter for safe in-place modification with backup
-                        from .file_writer import SafeFileWriter
+                        # Get pending changes for preview
+                        changes = self.safety_preview.get_pending_changes(file_path, fixed_code)
                         
-                        writer = SafeFileWriter()
-                        success, message = writer.write(file_path, fixed_code, create_backup=True)
-                        if success:
-                            output_header += f"\n\n✓ Auto-saved to: {file_path} (backup created)"
-                            print(f"[DEBUG] {message}")
+                        if changes['stats']['total_changes'] > 0:
+                            # Store interaction for feedback
+                            self.feedback_manager.store_pending_interaction(
+                                query=user_query,
+                                original_code=code[:2000],
+                                suggested_fix=fixed_code[:2000],
+                                file_path=file_path,
+                                error_type=", ".join(issues) if issues else "optimization",
+                                metadata={
+                                    "original_lines": len(code.splitlines()),
+                                    "fixed_lines": len(fixed_code.splitlines()),
+                                    "fixes_applied": len(applied_fixes),
+                                    "auto_saved": auto_save
+                                }
+                            )
+                            
+                            # Apply safely with backup
+                            success, message = self.safety_preview.apply_safely(file_path, fixed_code, force=False)
+                            if success:
+                                output_header += f"\n\n✓ {message}"
+                                print(f"[DEBUG] {message}")
+                            else:
+                                output_header += f"\n⚠ Auto-save failed: {message}"
                         else:
-                            output_header += f"\n⚠ Auto-save failed: {message}"
+                            output_header += f"\n\nℹ No meaningful changes to save."
+                            
                     except Exception as save_error:
                         output_header += f"\n⚠ Auto-save failed: {save_error}"
                         print(f"[DEBUG] Auto-save error: {save_error}")
+                
+                # NEW: Enhance output with Writer if available
+                if self.writer and len(applied_fixes) > 0:
+                    try:
+                        output_header = self.writer.format_response(
+                            output_header,
+                            format_type="code_review",
+                            title=f"Optimization Report: {file_path}"
+                        )
+                    except Exception as writer_error:
+                        print(f"[DEBUG] Writer enhancement failed: {writer_error}")
                 
                 # TRUNCATE displayed code to prevent terminal overload (show preview only)
                 # Full code is available but we only show first 50 lines / ~1500 chars as preview
@@ -2254,16 +2359,25 @@ Write fixed code now:"""
                     self.last_optimized_code = fixed_code
                     self.last_optimized_file_path = file_path  # Track the file path
                     
-                    # STEP 6: Record Fix in Memory for Future Learning (NEW)
-                    if self.memory_core and len(applied_fixes) > 0:
+                    # STEP 6: Record Fix in Adaptive Memory for Self-Learning (NEW - Trinity Architecture)
+                    if self.memory and len(applied_fixes) > 0:
                         try:
-                            self.memory_core.record_fix(
+                            # Record the successful fix pattern
+                            self.memory.record_feedback(
+                                query=user_query,
+                                original_code=code[:2000],  # Store first 2000 chars for context
+                                suggested_fix=fixed_code[:2000],
+                                user_feedback="accepted",  # Auto-accept since Python fixer applied it
                                 file_path=file_path,
-                                issues_fixed=applied_fixes,
-                                success=True,
-                                context={"query": user_query, "original_lines": len(code.splitlines()), "fixed_lines": len(fixed_code.splitlines())}
+                                error_type=", ".join(issues) if issues else "optimization",
+                                metadata={
+                                    "original_lines": len(code.splitlines()),
+                                    "fixed_lines": len(fixed_code.splitlines()),
+                                    "fixes_applied": len(applied_fixes),
+                                    "auto_saved": auto_save
+                                }
                             )
-                            print(f"[DEBUG] Fix recorded in memory")
+                            print(f"[DEBUG] Fix recorded in adaptive memory for learning")
                         except Exception as mem_error:
                             print(f"[DEBUG] Memory recording failed: {mem_error}")
                     
@@ -2275,9 +2389,9 @@ Write fixed code now:"""
                     self.last_optimized_file_path = file_path  # Track the file path
                     
                     # STEP 6: Record Fix in Memory for Future Learning (NEW)
-                    if self.memory_core and len(applied_fixes) > 0:
+                    if self.memory and len(applied_fixes) > 0:
                         try:
-                            self.memory_core.record_fix(
+                            self.memory.record_fix(
                                 file_path=file_path,
                                 issues_fixed=applied_fixes,
                                 success=True,
@@ -2294,9 +2408,9 @@ Write fixed code now:"""
                 preview_code = "\n".join(preview_lines)
                 
                 # Still record in memory that no issues were found (useful pattern)
-                if self.memory_core:
+                if self.memory:
                     try:
-                        self.memory_core.record_fix(
+                        self.memory.record_fix(
                             file_path=file_path,
                             issues_fixed=["No issues found"],
                             success=True,

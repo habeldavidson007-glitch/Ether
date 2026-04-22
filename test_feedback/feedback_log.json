@@ -1,0 +1,69 @@
+[
+  {
+    "id": "f5f96b06d00c",
+    "timestamp": "2026-04-22T16:48:05.635153",
+    "query": "Fix null reference in player script",
+    "original_code": "func _ready():\n    player.health = 100",
+    "suggested_fix": "func _ready():\n    if player:\n        player.health = 100",
+    "file_path": "player.gd",
+    "error_type": "null_reference",
+    "feedback": "accepted",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "null_reference",
+      "query_length": 35,
+      "code_lines": 2,
+      "fix_lines": 3,
+      "has_function": true,
+      "has_class": false,
+      "keywords": [
+        "func"
+      ]
+    }
+  },
+  {
+    "id": "e5531393c84e",
+    "timestamp": "2026-04-22T16:48:05.635645",
+    "query": "Optimize loop in enemy AI",
+    "original_code": "for enemy in enemies:\n    if enemy.distance < 10:\n        attack()",
+    "suggested_fix": "var nearby_enemies = enemies.filter(func(e): return e.distance < 10)\nfor enemy in nearby_enemies:\n    attack()",
+    "file_path": "enemy_ai.gd",
+    "error_type": "performance",
+    "feedback": "accepted",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "performance",
+      "query_length": 25,
+      "code_lines": 3,
+      "fix_lines": 3,
+      "has_function": false,
+      "has_class": false,
+      "keywords": [
+        "if",
+        "for"
+      ]
+    }
+  },
+  {
+    "id": "53e6d3179087",
+    "timestamp": "2026-04-22T16:48:05.635850",
+    "query": "Add error handling",
+    "original_code": "var data = load_file(path)",
+    "suggested_fix": "var data = load_file(path) if File.file_exists(path) else null",
+    "file_path": "utils.gd",
+    "error_type": "error_handling",
+    "feedback": "rejected",
+    "features": {
+      "file_extension": ".gd",
+      "error_type": "error_handling",
+      "query_length": 18,
+      "code_lines": 1,
+      "fix_lines": 1,
+      "has_function": false,
+      "has_class": false,
+      "keywords": [
+        "var"
+      ]
+    }
+  }
+]

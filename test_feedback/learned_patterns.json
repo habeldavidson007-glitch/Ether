@@ -1,0 +1,25 @@
+{
+  "null_reference_.gd": [
+    {
+      "query_pattern": "Fix null reference in player script",
+      "keywords": [
+        "func"
+      ],
+      "fix_preview": "func _ready():\n    if player:\n        player.health = 100",
+      "success_count": 1,
+      "last_used": "2026-04-22T16:48:05.635153"
+    }
+  ],
+  "performance_.gd": [
+    {
+      "query_pattern": "Optimize loop in enemy AI",
+      "keywords": [
+        "if",
+        "for"
+      ],
+      "fix_preview": "var nearby_enemies = enemies.filter(func(e): return e.distance < 10)\nfor enemy in nearby_enemies:\n    attack()",
+      "success_count": 1,
+      "last_used": "2026-04-22T16:48:05.635645"
+    }
+  ]
+}
