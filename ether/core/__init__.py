@@ -10,9 +10,8 @@ from .consciousness import (
     Hippocampus,
     Cortex,
     EffectorRegistry,
-    ConsciousState,
-    ThoughtProcess,
-    create_consciousness
+    SafetyGuard,
+    get_consciousness
 )
 
 __all__ = [
@@ -20,7 +19,6 @@ __all__ = [
     "Hippocampus",
     "Cortex",
     "EffectorRegistry",
-    "ConsciousState",
-    "ThoughtProcess",
-    "create_consciousness"
+    "SafetyGuard",
+    "get_consciousness"
 ]
