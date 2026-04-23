@@ -1,55 +1,55 @@
 ```
-# Dependencies
-*.egg-info/
-*.eggs/
-*.pyc
-__pycache__/
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-ENV/
-.venv/
+# Configuration and workflow files
+.pre-commit-config.yaml
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Environment files
 .env
 .env.local
-.env.*
-.venv.bak/
-.python-version
-*.dist-info/
+*.env.*
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
 
 # Build artifacts
-build/
 dist/
+build/
 *.so
 *.dylib
 *.dll
 *.exe
 *.out
 
-# Logs
-*.log
-
-# Environment specific
-.envrc
-.flaskenv
+# Coverage reports
 .coverage
+coverage/
 htmlcov/
-.coverage.*
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-
-# OS
+# OS generated files
 .DS_Store
 Thumbs.db
 
-# Testing
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
+# Python specific
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.sqlite3
+[IDidU]*
+[Tt]est[Uu]nit*.py
 ```
