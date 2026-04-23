@@ -578,11 +578,9 @@ def get_cortex(project_root: str = None) -> Cortex:
 
 
 # ── ALIAS FOR BACKWARD COMPATIBILITY ─────────────────────────────────────
-# Export run_pipeline from builder.py for backward compatibility
-# This allows code to import run_pipeline from cortex.py while it still lives in builder.py
+# Export run_pipeline and EtherBrain from builder.py for backward compatibility
+# This allows code to import from cortex.py while implementations still live in builder.py
 
-from .builder import run_pipeline
+from .builder import run_pipeline, EtherBrain
 
-
-# Alias for backward compatibility
-from .builder import run_pipeline
+__all__ = ["run_pipeline", "EtherBrain"]
