@@ -15,6 +15,7 @@ import os
 import re
 import json
 import logging
+import psutil
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
@@ -31,6 +32,48 @@ except ImportError:
     logging.warning("scikit-learn not available. Falling back to rule-based classification.")
 
 logger = logging.getLogger(__name__)
+
+# Godot-related keywords for domain filtering
+GODOT_KEYWORDS = {
+    "godot", "gdscript", "scene", "node", "shader", "tscn", "gdextension",
+    "engine", "viewport", "canvas", "sprite", "kinematic", "rigidbody",
+    "area", "collision", "signal", " tween", "animation", "material",
+    "texture", "mesh", "light", "camera", "ui", "control", "panel",
+    "button", "label", "lineedit", "vbox", "hbox", "grid", "margin",
+    "color", "vector2", "vector3", "transform", "basis", "quat", "pool",
+    "array", "dictionary", "yield", "await", "coroutine", "rpc", "network",
+    "export", "onready", "class_name", "extends", "func", "var", "const",
+    "enum", "tool", "editor", "inspector", "filesystem", "debugger"
+}
+
+# Model configuration based on RAM
+MODEL_7B = "qwen2.5-coder:7b-instruct-q4_k_m"
+MODEL_1_5B = "qwen2.5-coder:1.5b-instruct-q4_k_m"
+RAM_THRESHOLD_GB = 8
+
+
+def detect_ram_and_suggest_model() -> Tuple[str, int]:
+    """
+    Detect available RAM and suggest appropriate model.
+    
+    Returns:
+        Tuple of (model_name, available_ram_gb)
+    """
+    try:
+        mem = psutil.virtual_memory()
+        available_gb = mem.available / (1024 ** 3)
+        
+        if available_gb > RAM_THRESHOLD_GB:
+            suggested_model = MODEL_7B
+            logger.info(f"Available RAM: {available_gb:.1f}GB (> {RAM_THRESHOLD_GB}GB) → Suggesting {MODEL_7B}")
+        else:
+            suggested_model = MODEL_1_5B
+            logger.info(f"Available RAM: {available_gb:.1f}GB (≤ {RAM_THRESHOLD_GB}GB) → Using {MODEL_1_5B}")
+        
+        return suggested_model, int(available_gb)
+    except Exception as e:
+        logger.warning(f"Failed to detect RAM: {e}. Defaulting to 1.5B model.")
+        return MODEL_1_5B, 0
 
 @dataclass
 class MemoryUnit:
@@ -442,11 +485,69 @@ class EtherConsciousness:
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.conversation_history: List[Dict[str, Any]] = []
         
+        # Detect RAM and suggest model at startup
+        suggested_model, available_ram = detect_ram_and_suggest_model()
+        self.suggested_model = suggested_model
+        self.available_ram_gb = available_ram
         logger.info(f"EtherConsciousness initialized (Session: {self.session_id})")
+
+    def is_godot_related(self, query: str) -> bool:
+        """
+        Check if a query is related to Godot/GDScript development.
+        
+        Uses a two-tier approach:
+        1. Fast keyword heuristic check
+        2. Low-threshold ML confidence check for ambiguous cases
+        
+        Returns:
+            True if query is Godot-related, False otherwise
+        """
+        query_lower = query.lower()
+        
+        # Tier 1: Keyword heuristic check (fast path)
+        godot_keyword_count = sum(1 for kw in GODOT_KEYWORDS if kw in query_lower)
+        
+        # Strong match: 2+ keywords or 1 strong keyword
+        strong_keywords = {"godot", "gdscript", "scene", "node", "shader", "tscn", "gdextension"}
+        has_strong_keyword = any(kw in query_lower for kw in strong_keywords)
+        
+        if godot_keyword_count >= 2 or has_strong_keyword:
+            return True
+        
+        # No keywords found - likely off-domain
+        if godot_keyword_count == 0:
+            return False
+        
+        # Tier 2: Ambiguous case - use ML classifier with low threshold
+        if ML_AVAILABLE and self.cortex.classifier:
+            try:
+                _, confidence = self.cortex.classify_intent(query)
+                return confidence >= 0.3
+            except Exception:
+                pass
+        
+        # Fallback: if we got here with 1 keyword, be conservative and allow it
+        return True
 
     def process_query(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Main entry point: Process user query through consciousness loop"""
         start_time = datetime.now()
+
+        # Step 0: Off-Domain Guard - filter non-Godot queries
+        if not self.is_godot_related(query):
+            words = query.split()[:5]
+            topic = " ".join(words).rstrip("?.!,")
+            return {
+                "session_id": self.session_id,
+                "query": query,
+                "intent": "refused",
+                "confidence": 1.0,
+                "output": f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}.",
+                "skills_used": [],
+                "duration_ms": (datetime.now() - start_time).total_seconds() * 1000,
+                "success": False,
+                "error": "off_domain"
+            }
         
         # Step 1: Classify Intent
         intent, confidence = self.cortex.classify_intent(query)

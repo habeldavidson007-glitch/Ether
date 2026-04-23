@@ -80,12 +80,65 @@ def _decompose_task(query: str) -> dict:
     }
 
 
-def _reduce_task(task: dict, analysis: dict) -> dict:
+def _cot_fallback(task: dict, analysis: dict, knowledge_context: str = "") -> dict:
+    """
+    Chain-of-Thought fallback for novel/unrecognized patterns.
+    
+    Forces the model to:
+    1. Analyze the error message/code snippet
+    2. Hypothesize 3 potential causes
+    3. Select the most likely cause based on Godot best practices
+    4. Propose a fix
+    
+    Returns: {"focus": str, "instruction": str, "limit": str, "cot_prompt": str}
+    """
+    issues = analysis.get("issues", []) if analysis else []
+    issue_str = ", ".join(issues) if issues else "unknown issue"
+    task_action = task.get("action", "debug")
+    task_file = task.get("file", "unknown file")
+    
+    # Build CoT prompt that will be injected into the LLM call
+    cot_prompt = f"""You are debugging a Godot/GDScript issue. Follow this Chain-of-Thought process:
+
+STEP 1 - ANALYSIS:
+- Error/Issue: {issue_str}
+- File: {task_file}
+- Action Requested: {task_action}
+{f"- Knowledge Context: {knowledge_context[:500]}" if knowledge_context else ""}
+
+STEP 2 - HYPOTHESIZE (list 3 potential causes):
+1. [First potential cause based on error pattern]
+2. [Second potential cause based on code structure]
+3. [Third potential cause based on Godot conventions]
+
+STEP 3 - EVALUATE (select most likely):
+- Compare each hypothesis against Godot best practices
+- Consider common pitfalls in similar scenarios
+- Select the hypothesis with strongest evidence
+
+STEP 4 - PROPOSE FIX:
+- Provide a minimal, targeted fix addressing the root cause
+- Explain why this fix works
+- Note any side effects or considerations
+
+Respond with your complete chain-of-thought followed by the concrete fix."""
+
+    return {
+        "focus": f"{task_action} via systematic analysis",
+        "instruction": f"Apply Chain-of-Thought reasoning to solve: {issue_str}",
+        "limit": "max 40 lines including CoT steps",
+        "cot_prompt": cot_prompt
+    }
+
+
+def _reduce_task(task: dict, analysis: dict, search_engine=None, query: str = None) -> dict:
     """
     Convert vague task into atomic instruction based on static analysis.
     This is the CORE of the Thinking Engine - reduces LLM cognitive load.
     
-    Returns: {"focus": str, "instruction": str, "limit": str}
+    If no hardcoded pattern matches, triggers Chain-of-Thought fallback.
+    
+    Returns: {"focus": str, "instruction": str, "limit": str, "cot_prompt": str (optional)}
     """
     issues = analysis.get("issues", []) if analysis else []
     issue_str = ", ".join(issues).lower() if issues else ""
@@ -141,12 +194,18 @@ def _reduce_task(task: dict, analysis: dict) -> dict:
             "limit": "max 30 lines"
         }
 
-    # Default fallback
-    return {
-        "focus": "general improvement",
-        "instruction": "make minimal necessary improvements for clarity and efficiency",
-        "limit": "max 20 lines"
-    }
+    # CHAIN-OF-THOUGHT FALLBACK: For novel patterns not matching hardcoded rules
+    # Retrieve relevant knowledge if search engine is available
+    knowledge_context = ""
+    if search_engine and query:
+        try:
+            results = search_engine.search(query, mode="hybrid", top_k=3)
+            if results:
+                knowledge_context = "\n\n".join([r.get("content", "")[:300] for r in results])
+        except Exception as e:
+            logger.warning(f"CoT knowledge retrieval failed: {e}")
+    
+    return _cot_fallback(task, analysis, knowledge_context)
 
 
 def _build_execution_prompt(file: str, reduction: dict, context: str) -> str:
@@ -1140,13 +1199,47 @@ def _debug(task: str, context: str) -> Dict:
     return result
 
 
-def _explain(task: str, context: str) -> str:
-    """EXPLAIN role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="analyze")[:200]  # Slightly more for analysis
-    user_content = f"{task}\n{ctx}" if ctx else task
+def _explain(task: str, context: str, search_engine=None) -> str:
+    """EXPLAIN role - ultra-light for 1.5B models with knowledge base integration.
     
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 expert. Analyze and optimize. Be specific about file names and line changes. 3 bullet points max."
+    Integrates unified_search to retrieve relevant chunks from:
+    - 163-doc knowledge base
+    - Current project files
+    
+    For conceptual questions, knowledge base docs are prioritized.
+    """
+    # Retrieve knowledge base context if search engine is available
+    kb_context = ""
+    if search_engine:
+        try:
+            # Search for relevant knowledge base documents
+            results = search_engine.search(task, mode="hybrid", top_k=5)
+            if results:
+                # Prioritize knowledge base docs for conceptual questions
+                kb_docs = [r for r in results if r.get("source_type") == "knowledge"]
+                project_docs = [r for r in results if r.get("source_type") != "knowledge"]
+                
+                # Build context with KB docs first
+                context_parts = []
+                for doc in kb_docs[:3]:  # Up to 3 KB docs
+                    context_parts.append(f"### Knowledge Base: {doc.get('source', 'Unknown')}\n{doc.get('content', '')[:400]}")
+                for doc in project_docs[:2]:  # Up to 2 project docs
+                    context_parts.append(f"### Project: {doc.get('source', 'Unknown')}\n{doc.get('content', '')[:300]}")
+                
+                kb_context = "\n\n".join(context_parts)
+        except Exception as e:
+            logger.warning(f"Explain knowledge retrieval failed: {e}")
+    
+    # Combine contexts
+    ctx = _trim_context(context, task, task_type="analyze")[:200]
+    user_content = f"{task}\n"
+    if kb_context:
+        user_content += f"\n### Relevant Documentation:\n{kb_context}\n\n"
+    if ctx:
+        user_content += f"### Project Context:\n{ctx}"
+    
+    # Enhanced prompt that references knowledge base
+    system_prompt = "Godot 4 expert. Use provided documentation and project context to explain concepts clearly. Reference specific file names and line numbers when applicable. 3-5 bullet points max."
     
     return _call("explain", [
         {"role": "system", "content": system_prompt},
