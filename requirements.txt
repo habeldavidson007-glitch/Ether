@@ -1,2 +1,4 @@
+# DEPRECATED: See pyproject.toml for dependencies.
+
 streamlit>=1.35,<1.45
 requests>=2.31

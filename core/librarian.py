@@ -8,6 +8,12 @@ Features:
 - Mode-aware filtering (coding/general/mixed)
 - Lazy loading for memory efficiency
 - Automatic chunking and scoring
+- Thread-safe operations for concurrent access
+
+Improvements in v1.9.8:
+- Thread-safe indexing and search operations
+- Memory-efficient lazy loading
+- Scalability enhancements for large knowledge bases
 
 Usage:
     librarian = get_librarian()
@@ -16,47 +22,50 @@ Usage:
 
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 
 class InvertedIndex:
-    """Keyword-based inverted index for fast topic lookup."""
+    """Keyword-based inverted index for fast topic lookup. Thread-safe implementation."""
     
     def __init__(self):
         self.index: Dict[str, List[Tuple[str, int]]] = defaultdict(list)  # word -> [(file_id, score), ...]
         self.file_metadata: Dict[str, dict] = {}  # file_id -> {mode, topics, path}
         self._indexed = False
+        self._lock = threading.RLock()  # Thread safety
     
     def add_file(self, file_id: str, content: str, mode: str = "mixed", topics: Optional[List[str]] = None):
-        """Add a file to the index with metadata."""
-        # Extract keywords from content
-        words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b', content.lower())
-        
-        # Count word frequency for scoring
-        word_freq = defaultdict(int)
-        for word in words:
-            word_freq[word] += 1
-        
-        # Add to inverted index with TF scores
-        for word, freq in word_freq.items():
-            score = min(freq, 10)  # Cap score at 10 to prevent dominance
-            self.index[word].append((file_id, score))
-        
-        # Store metadata
-        self.file_metadata[file_id] = {
-            "mode": mode,
-            "topics": topics or [],
-            "word_count": len(words),
-            "unique_words": len(word_freq)
-        }
-        
-        self._indexed = True
+        """Add a file to the index with metadata. Thread-safe."""
+        with self._lock:
+            # Extract keywords from content
+            words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b', content.lower())
+            
+            # Count word frequency for scoring
+            word_freq = defaultdict(int)
+            for word in words:
+                word_freq[word] += 1
+            
+            # Add to inverted index with TF scores
+            for word, freq in word_freq.items():
+                score = min(freq, 10)  # Cap score at 10 to prevent dominance
+                self.index[word].append((file_id, score))
+            
+            # Store metadata
+            self.file_metadata[file_id] = {
+                "mode": mode,
+                "topics": topics or [],
+                "word_count": len(words),
+                "unique_words": len(word_freq)
+            }
+            
+            self._indexed = True
     
     def search(self, query: str, mode_filter: str = "mixed") -> List[Tuple[str, float]]:
         """
-        Search for files matching query keywords.
+        Search for files matching query keywords. Thread-safe.
         
         Args:
             query: User query string
@@ -65,40 +74,42 @@ class InvertedIndex:
         Returns:
             List of (file_id, relevance_score) sorted by score descending
         """
-        query_words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b', query.lower())
-        
-        if not query_words:
-            return []
-        
-        # Aggregate scores across all query words
-        file_scores: Dict[str, float] = defaultdict(float)
-        
-        for word in query_words:
-            # Exact match
-            if word in self.index:
-                for file_id, score in self.index[word]:
-                    # Apply mode filter
-                    if mode_filter == "mixed" or self.file_metadata[file_id]["mode"] == mode_filter:
-                        file_scores[file_id] += score
+        with self._lock:
+            query_words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b', query.lower())
             
-            # Partial match (substring)
-            for indexed_word, matches in self.index.items():
-                if word in indexed_word or indexed_word in word:
-                    for file_id, score in matches:
+            if not query_words:
+                return []
+            
+            # Aggregate scores across all query words
+            file_scores: Dict[str, float] = defaultdict(float)
+            
+            for word in query_words:
+                # Exact match
+                if word in self.index:
+                    for file_id, score in self.index[word]:
+                        # Apply mode filter
                         if mode_filter == "mixed" or self.file_metadata[file_id]["mode"] == mode_filter:
-                            file_scores[file_id] += score * 0.5  # Lower weight for partial matches
-        
-        # Sort by score descending
-        sorted_results = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)
-        
-        return sorted_results
+                            file_scores[file_id] += score
+                
+                # Partial match (substring)
+                for indexed_word, matches in self.index.items():
+                    if word in indexed_word or indexed_word in word:
+                        for file_id, score in matches:
+                            if mode_filter == "mixed" or self.file_metadata[file_id]["mode"] == mode_filter:
+                                file_scores[file_id] += score * 0.5  # Lower weight for partial matches
+            
+            # Sort by score descending
+            sorted_results = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)
+            
+            return sorted_results
     
     def get_all_topics(self) -> List[str]:
-        """Get all unique topics from indexed files."""
-        topics = set()
-        for meta in self.file_metadata.values():
-            topics.update(meta["topics"])
-        return sorted(list(topics))
+        """Get all unique topics from indexed files. Thread-safe."""
+        with self._lock:
+            topics = set()
+            for meta in self.file_metadata.values():
+                topics.update(meta["topics"])
+            return sorted(list(topics))
 
 
 class Librarian:

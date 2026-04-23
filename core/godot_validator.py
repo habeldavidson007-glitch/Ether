@@ -68,7 +68,7 @@ class GodotValidator:
         if not self.godot_path:
             return True, ["⚠ Godot executable not found - skipping runtime validation"]
         
-        if not os.path.exists(script_path):
+        if not Path(script_path).exists():
             return False, [f"Error: Script file not found: {script_path}"]
         
         # Build command
@@ -123,7 +123,7 @@ class GodotValidator:
         Returns:
             Tuple of (is_valid, list_of_errors)
         """
-        if not os.path.exists(scene_path):
+        if not Path(scene_path).exists():
             return False, [f"Error: Scene file not found: {scene_path}"]
         
         errors = []
@@ -138,11 +138,11 @@ class GodotValidator:
             for match in re.finditer(ext_resource_pattern, content):
                 resource_path = match.group(1)
                 
-                # Resolve relative paths
-                if not os.path.isabs(resource_path):
-                    resource_path = os.path.join(os.path.dirname(scene_path), resource_path)
+                # Resolve relative paths using pathlib
+                if not Path(resource_path).is_absolute():
+                    resource_path = str(Path(scene_path).parent / resource_path)
                 
-                if not os.path.exists(resource_path):
+                if not Path(resource_path).exists():
                     errors.append(f"🔴 Missing external resource: {resource_path}")
             
             # Check for script attachments
@@ -157,11 +157,11 @@ class GodotValidator:
                 if script_match:
                     script_path = script_match.group(1)
                     
-                    # Resolve relative paths
-                    if not os.path.isabs(script_path):
-                        script_path = os.path.join(os.path.dirname(scene_path), script_path)
+                    # Resolve relative paths using pathlib
+                    if not Path(script_path).is_absolute():
+                        script_path = str(Path(scene_path).parent / script_path)
                     
-                    if not os.path.exists(script_path):
+                    if not Path(script_path).exists():
                         errors.append(f"🔴 Missing script: {script_path}")
                     else:
                         # Validate the attached script
@@ -199,9 +199,9 @@ class GodotValidator:
         Returns:
             Tuple of (is_valid, list_of_errors)
         """
-        project_file = os.path.join(project_path, "project.godot")
+        project_file = Path(project_path) / "project.godot"
         
-        if not os.path.exists(project_file):
+        if not project_file.exists():
             return False, [f"🔴 Project file not found: {project_file}"]
         
         try:

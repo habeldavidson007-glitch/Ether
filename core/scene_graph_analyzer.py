@@ -94,12 +94,13 @@ class SceneGraphAnalyzer:
         
         # Find all .tscn files
         tscn_files = []
+        project_root = Path(project_path)
         for root, dirs, files in os.walk(project_path):
             # Skip common non-essential directories
             dirs[:] = [d for d in dirs if d not in ['.git', '.godot', 'addons']]
             for file in files:
                 if file.endswith('.tscn'):
-                    tscn_files.append(os.path.join(root, file))
+                    tscn_files.append(str(Path(root) / file))
         
         # Parse each scene
         for tscn_path in tscn_files:
@@ -302,9 +303,13 @@ class SceneGraphAnalyzer:
             
             # Detect missing script references
             for node_name, script_path in scene_info.scripts.items():
-                if script_path and not os.path.exists(script_path.replace('res://', os.path.dirname(scene_path) + '/')):
-                    # Script file doesn't exist
-                    pass  # Could add to a missing_scripts list
+                if script_path:
+                    # Convert res:// to actual path using pathlib
+                    scene_dir = Path(scene_path).parent
+                    actual_path = script_path.replace('res://', str(scene_dir) + '/')
+                    if not Path(actual_path).exists():
+                        # Script file doesn't exist
+                        pass  # Could add to a missing_scripts list
     
     def get_scene_stats(self) -> Dict[str, Any]:
         """Get statistics about all analyzed scenes."""
@@ -400,9 +405,10 @@ class SceneGraphAnalyzer:
             for node_name, script_path in scene_info.scripts.items():
                 # Check if script file exists
                 if script_path:
-                    # Convert res:// to actual path
-                    actual_path = script_path.replace('res://', os.path.dirname(scene_path) + '/')
-                    if not os.path.exists(actual_path):
+                    # Convert res:// to actual path using pathlib
+                    scene_dir = Path(scene_path).parent
+                    actual_path = script_path.replace('res://', str(scene_dir) + '/')
+                    if not Path(actual_path).exists():
                         errors.append({
                             'type': 'missing_script',
                             'scene': scene_path,
@@ -420,7 +426,7 @@ class SceneGraphAnalyzer:
         
         scene = self.scenes[scene_path]
         lines = [
-            f"📄 Scene: {os.path.basename(scene_path)}",
+            f"📄 Scene: {Path(scene_path).name}",
             f"   Type: {scene.root_node_type}",
             f"   Nodes: {scene.node_count}",
             f"   Scripts: {scene.script_count}",

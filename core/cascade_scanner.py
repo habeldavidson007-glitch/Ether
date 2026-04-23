@@ -3,7 +3,7 @@ Cascade Scanner - Proactive Dependency Analysis & Breakage Prevention
 Scans connected files to prevent ripple-effect bugs and suggest proactive optimizations.
 """
 
-import os
+import re
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional, Any
 from dataclasses import dataclass, field
@@ -88,7 +88,7 @@ class CascadeScanner:
         warnings = []
         
         try:
-            if not os.path.exists(dependent_file):
+            if not Path(dependent_file).exists():
                 return warnings
             
             with open(dependent_file, 'r', encoding='utf-8') as f:
@@ -104,8 +104,8 @@ class CascadeScanner:
                             file_path=dependent_file,
                             severity="HIGH",
                             issue_type="SIGNAL_BREAKAGE",
-                            description=f"File uses signal '{signal_name}' which was modified/removed in {os.path.basename(target_file)}",
-                            suggested_fix=f"Update signal connection in {os.path.basename(dependent_file)}"
+                            description=f"File uses signal '{signal_name}' which was modified/removed in {Path(target_file).name}",
+                            suggested_fix=f"Update signal connection in {Path(dependent_file).name}"
                         ))
                 
                 if "function" in change.lower() or "method" in change.lower():
@@ -115,8 +115,8 @@ class CascadeScanner:
                             file_path=dependent_file,
                             severity="MEDIUM",
                             issue_type="FUNCTION_SIGNATURE_CHANGE",
-                            description=f"File may call function '{func_name}' which was modified in {os.path.basename(target_file)}",
-                            suggested_fix=f"Verify function signature compatibility in {os.path.basename(dependent_file)}"
+                            description=f"File may call function '{func_name}' which was modified in {Path(target_file).name}",
+                            suggested_fix=f"Verify function signature compatibility in {Path(dependent_file).name}"
                         ))
                 
                 if "variable" in change.lower() or "export" in change.lower():
@@ -157,7 +157,7 @@ class CascadeScanner:
         suggestions = []
         
         try:
-            if not os.path.exists(file_path):
+            if not Path(file_path).exists():
                 return suggestions
             
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -167,13 +167,13 @@ class CascadeScanner:
             issues = self.static_analyzer.analyze_code(content, file_path)
             
             if issues:
-                suggestions.append(f"{os.path.basename(file_path)}: {len(issues)} issue(s) detected - consider optimizing")
+                suggestions.append(f"{Path(file_path).name}: {len(issues)} issue(s) detected - consider optimizing")
                 
                 # Specific suggestions based on issue types
                 if any("loop" in i.lower() for i in issues):
-                    suggestions.append(f"  → Optimize loops in {os.path.basename(file_path)}")
+                    suggestions.append(f"  → Optimize loops in {Path(file_path).name}")
                 if any("long" in i.lower() or "large" in i.lower() for i in issues):
-                    suggestions.append(f"  → Consider splitting {os.path.basename(file_path)} into smaller modules")
+                    suggestions.append(f"  → Consider splitting {Path(file_path).name} into smaller modules")
         
         except Exception:
             pass
@@ -228,7 +228,7 @@ class CascadeScanner:
                     icon = "⚠️" if severity == "HIGH" else "⚡" if severity == "MEDIUM" else "ℹ️"
                     lines.append(f"  {icon} {severity}: {len(by_severity[severity])} issue(s)")
                     for w in by_severity[severity][:3]:  # Show top 3
-                        lines.append(f"     • {os.path.basename(w.file_path)}: {w.description}")
+                        lines.append(f"     • {Path(w.file_path).name}: {w.description}")
         
         if report.proactive_suggestions:
             lines.append("  💡 Proactive optimizations:")

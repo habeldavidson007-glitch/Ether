@@ -6,6 +6,7 @@ Enables safe refactoring and impact analysis.
 
 import os
 import re
+from pathlib import Path
 from typing import Dict, Set, List, Optional, Tuple
 from collections import defaultdict
 import json
@@ -27,6 +28,7 @@ class DependencyGraph:
         """Scan entire project and build dependency graph."""
         self.clear()
         file_count = 0
+        project_root = Path(project_path)
         
         for root, _, files in os.walk(project_path):
             # Skip hidden folders and imports
@@ -34,7 +36,7 @@ class DependencyGraph:
                 continue
                 
             for file in files:
-                filepath = os.path.join(root, file)
+                filepath = str(Path(root) / file)
                 self.all_files.add(filepath)
                 
                 if file.endswith('.gd'):

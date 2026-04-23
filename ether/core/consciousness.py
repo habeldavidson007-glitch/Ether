@@ -1,0 +1,579 @@
+"""
+Ether Consciousness Engine - Phase 10: The Great Unification
+
+This module unifies all fragmented components (Memory, Tools, Cognitive Layers)
+into a single Deterministic Neuro-Symbolic Agent.
+
+Architecture:
+- Cortex: Deterministic Intent Classification (TF-IDF + Decision Rules)
+- Hippocampus: Unified Memory (Working + Long-term + Semantic)
+- Effectors: Registered Tools (Code Fixer, Analyzer, etc.)
+- SafetyGuard: Pre-execution validation
+"""
+
+import os
+import re
+import json
+import logging
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime
+
+# ML Dependencies
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+    logging.warning("scikit-learn not available. Falling back to rule-based classification.")
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class MemoryUnit:
+    """Unified memory unit for Hippocampus"""
+    content: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
+    access_count: int = 0
+    relevance_score: float = 1.0
+
+class Hippocampus:
+    """
+    Step 2: Consolidated Memory System
+    Merges Adaptive Memory, Librarian, and Context Manager
+    """
+    def __init__(self, capacity: int = 1000):
+        self.capacity = capacity
+        self.working_memory: List[MemoryUnit] = []
+        self.long_term_memory: List[MemoryUnit] = []
+        self.vectorizer: Optional[Any] = None
+        
+        # Initialize semantic search if possible
+        if ML_AVAILABLE:
+            self.vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+        
+        logger.info("Hippocampus initialized with unified memory")
+
+    def add_to_working(self, content: str, metadata: Dict[str, Any] = None):
+        """Add to short-term working memory"""
+        unit = MemoryUnit(content=content, metadata=metadata or {})
+        self.working_memory.append(unit)
+        
+        # Cap working memory
+        if len(self.working_memory) > 50:
+            self.consolidate_to_long_term()
+            
+        return unit
+
+    def consolidate_to_long_term(self):
+        """Move important working memories to long-term storage"""
+        if not self.working_memory:
+            return
+            
+        # Simple heuristic: move oldest 80% to long-term
+        threshold = len(self.working_memory) * 0.2
+        to_move = self.working_memory[:int(threshold)]
+        self.working_memory = self.working_memory[int(threshold):]
+        
+        for unit in to_move:
+            if unit.relevance_score > 0.5:
+                self.long_term_memory.append(unit)
+                
+        # Cap long-term memory
+        if len(self.long_term_memory) > self.capacity:
+            self.long_term_memory = sorted(
+                self.long_term_memory, 
+                key=lambda x: x.relevance_score, 
+                reverse=True
+            )[:self.capacity]
+
+    def semantic_search(self, query: str, top_k: int = 5) -> List[MemoryUnit]:
+        """Search memory using semantic similarity"""
+        if not self.long_term_memory:
+            return []
+            
+        if not ML_AVAILABLE or not self.vectorizer:
+            return self._keyword_search(query, top_k)
+            
+        try:
+            corpus = [unit.content for unit in self.long_term_memory]
+            tfidf_matrix = self.vectorizer.fit_transform(corpus)
+            query_vec = self.vectorizer.transform([query])
+            
+            from sklearn.metrics.pairwise import cosine_similarity
+            similarities = cosine_similarity(query_vec, tfidf_matrix)[0]
+            
+            top_indices = similarities.argsort()[-top_k:][::-1]
+            results = [self.long_term_memory[i] for i in top_indices if similarities[i] > 0.1]
+            
+            for unit in results:
+                unit.access_count += 1
+                
+            return results
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return self._keyword_search(query, top_k)
+
+    def _keyword_search(self, query: str, top_k: int) -> List[MemoryUnit]:
+        """Fallback keyword search"""
+        query_lower = query.lower()
+        scored = []
+        for unit in self.long_term_memory:
+            score = unit.content.lower().count(query_lower) * 0.1
+            score += unit.relevance_score
+            scored.append((score, unit))
+        
+        scored.sort(reverse=True, key=lambda x: x[0])
+        return [unit for _, unit in scored[:top_k]]
+
+    def get_context(self, query: str) -> str:
+        """Retrieve relevant context for current query"""
+        relevant = self.semantic_search(query, top_k=3)
+        if not relevant:
+            return ""
+        return "\n---\n".join([unit.content for unit in relevant])
+
+
+@dataclass
+class ToolSkill:
+    """Registered tool/skill metadata"""
+    name: str
+    description: str
+    keywords: List[str]
+    handler: Any
+    input_schema: Dict[str, Any]
+    is_safe: bool = True
+
+class EffectorRegistry:
+    """
+    Step 3: Tool Registry
+    Registers all existing modules as skills
+    """
+    def __init__(self):
+        self.skills: Dict[str, ToolSkill] = {}
+        self._register_builtin_skills()
+        logger.info(f"EffectorRegistry initialized with {len(self.skills)} skills")
+
+    def _register_builtin_skills(self):
+        """Register existing core modules as skills"""
+        # Note: Handlers will be dynamically imported when needed
+        self.register_skill(ToolSkill(
+            name="code_fixer",
+            description="Fixes GDScript code errors and suggests improvements",
+            keywords=["fix", "error", "bug", "correct", "repair", "code"],
+            handler=None,  # Lazy loaded
+            input_schema={"code": "str", "error_msg": "str"}
+        ))
+        
+        self.register_skill(ToolSkill(
+            name="static_analyzer",
+            description="Analyzes code for potential issues without running it",
+            keywords=["analyze", "scan", "check", "inspect", "review"],
+            handler=None,
+            input_schema={"code": "str"}
+        ))
+        
+        self.register_skill(ToolSkill(
+            name="dependency_graph",
+            description="Builds and analyzes project dependency graphs",
+            keywords=["dependency", "graph", "import", "relationship"],
+            handler=None,
+            input_schema={"project_path": "str"}
+        ))
+        
+        self.register_skill(ToolSkill(
+            name="scene_analyzer",
+            description="Analyzes Godot scene structure and node relationships",
+            keywords=["scene", "node", "tree", "structure", "godot"],
+            handler=None,
+            input_schema={"scene_path": "str"}
+        ))
+        
+        self.register_skill(ToolSkill(
+            name="validator",
+            description="Validates Godot project configuration and best practices",
+            keywords=["validate", "verify", "check", "project.godot", "config"],
+            handler=None,
+            input_schema={"project_path": "str"}
+        ))
+        
+        self.register_skill(ToolSkill(
+            name="cascade_scanner",
+            description="Scans for cascading errors and dependency issues",
+            keywords=["cascade", "chain", "ripple", "propagate"],
+            handler=None,
+            input_schema={"path": "str"}
+        ))
+
+    def register_skill(self, skill: ToolSkill):
+        """Register a new skill"""
+        self.skills[skill.name] = skill
+
+    def find_relevant_skills(self, intent: str, keywords: List[str]) -> List[ToolSkill]:
+        """Find skills relevant to the intent"""
+        relevant = []
+        intent_lower = intent.lower()
+        
+        for skill in self.skills.values():
+            score = 0
+            if any(kw in intent_lower for kw in skill.keywords):
+                score += 2
+            if any(kw in ' '.join(keywords).lower() for kw in skill.keywords):
+                score += 1
+            if score > 0:
+                relevant.append((score, skill))
+        
+        relevant.sort(reverse=True, key=lambda x: x[0])
+        return [skill for _, skill in relevant]
+    
+    def load_handler(self, skill_name: str):
+        """Lazy load handler for a skill"""
+        if skill_name not in self.skills:
+            return None
+            
+        skill = self.skills[skill_name]
+        if skill.handler is not None:
+            return skill.handler
+            
+        # Dynamic import based on skill name - try multiple paths
+        try:
+            if skill_name == "code_fixer":
+                try:
+                    from ..core import code_fixer
+                except ImportError:
+                    import sys
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                    from core import code_fixer
+                skill.handler = getattr(code_fixer, 'fix_code', None)
+            elif skill_name == "static_analyzer":
+                try:
+                    from ..core import static_analyzer
+                except ImportError:
+                    import sys
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                    from core import static_analyzer
+                skill.handler = getattr(static_analyzer, 'analyze', None)
+            elif skill_name == "dependency_graph":
+                try:
+                    from ..core import dependency_graph
+                except ImportError:
+                    import sys
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                    from core import dependency_graph
+                skill.handler = getattr(dependency_graph, 'build_graph', None)
+            elif skill_name == "scene_analyzer":
+                try:
+                    from ..core import scene_graph_analyzer
+                except ImportError:
+                    import sys
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                    from core import scene_graph_analyzer
+                skill.handler = getattr(scene_graph_analyzer, 'analyze_scene', None)
+            elif skill_name == "validator":
+                try:
+                    from ..core import godot_validator
+                except ImportError:
+                    import sys
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                    from core import godot_validator
+                skill.handler = getattr(godot_validator, 'validate_project', None)
+            elif skill_name == "cascade_scanner":
+                try:
+                    from ..core import cascade_scanner
+                except ImportError:
+                    import sys
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                    from core import cascade_scanner
+                skill.handler = getattr(cascade_scanner, 'scan', None)
+        except Exception as e:
+            logger.error(f"Failed to load handler for {skill_name}: {e}")
+            
+        return skill.handler
+
+
+class Cortex:
+    """
+    Step 4: Deterministic ML Layer
+    Intent Classification and Decision Making
+    """
+    def __init__(self):
+        self.classifier: Optional[Pipeline] = None
+        self.intent_history: List[str] = []
+        self.training_data: List[Tuple[str, str]] = []
+        
+        if ML_AVAILABLE:
+            self._initialize_classifier()
+        logger.info("Cortex initialized")
+
+    def _initialize_classifier(self):
+        """Initialize the ML pipeline"""
+        self.classifier = Pipeline([
+            ('tfidf', TfidfVectorizer(ngram_range=(1, 2), max_features=1000)),
+            ('clf', LogisticRegression(max_iter=1000))
+        ])
+        self._seed_training_data()
+        self._retrain()
+
+    def _seed_training_data(self):
+        """Seed with predefined patterns"""
+        patterns = [
+            ("fix this code", "fix_code"),
+            ("repair error", "fix_code"),
+            ("bug in script", "fix_code"),
+            ("analyze this", "analyze"),
+            ("scan for issues", "analyze"),
+            ("check dependencies", "dependencies"),
+            ("show graph", "dependencies"),
+            ("validate project", "validate"),
+            ("verify config", "validate"),
+            ("scene structure", "scene_analysis"),
+            ("node tree", "scene_analysis"),
+            ("general question", "chat"),
+            ("hello", "chat"),
+        ]
+        self.training_data.extend(patterns)
+
+    def _retrain(self):
+        """Retrain classifier on accumulated data"""
+        if not self.classifier or not self.training_data:
+            return
+        texts, labels = zip(*self.training_data)
+        try:
+            self.classifier.fit(texts, labels)
+        except Exception as e:
+            logger.error(f"Training failed: {e}")
+
+    def classify_intent(self, query: str) -> Tuple[str, float]:
+        """Classify user intent deterministically"""
+        if not ML_AVAILABLE or not self.classifier:
+            return self._rule_based_classification(query), 0.8
+            
+        try:
+            prediction = self.classifier.predict([query])[0]
+            proba = self.classifier.predict_proba([query])[0].max()
+            self.intent_history.append(prediction)
+            if len(self.intent_history) % 10 == 0:
+                self._retrain()
+            return prediction, proba
+        except Exception as e:
+            logger.error(f"Classification failed: {e}")
+            return self._rule_based_classification(query), 0.5
+
+    def _rule_based_classification(self, query: str) -> str:
+        """Fallback rule-based classification"""
+        query_lower = query.lower()
+        if any(w in query_lower for w in ["fix", "error", "bug", "repair"]):
+            return "fix_code"
+        elif any(w in query_lower for w in ["analyze", "scan", "check"]):
+            return "analyze"
+        elif any(w in query_lower for w in ["dependency", "graph", "import"]):
+            return "dependencies"
+        elif any(w in query_lower for w in ["validate", "verify", "config"]):
+            return "validate"
+        elif any(w in query_lower for w in ["scene", "node", "tree"]):
+            return "scene_analysis"
+        else:
+            return "chat"
+
+    def add_feedback(self, query: str, correct_intent: str):
+        """Learn from user feedback"""
+        self.training_data.append((query, correct_intent))
+
+
+class SafetyGuard:
+    """Pre-execution safety validation"""
+    
+    DANGEROUS_PATTERNS = [
+        r"os\.system\s*\(",
+        r"subprocess\.",
+        r"eval\s*\(",
+        r"exec\s*\(",
+        r"__import__\s*\(",
+    ]
+    
+    def __init__(self):
+        self.compiled_patterns = [re.compile(p) for p in self.DANGEROUS_PATTERNS]
+
+    def validate_code(self, code: str) -> Tuple[bool, str]:
+        """Validate code before execution"""
+        for pattern in self.compiled_patterns:
+            if pattern.search(code):
+                return False, f"Dangerous pattern detected"
+        return True, "Safe"
+
+    def validate_path(self, path: str, allowed_root: str = None) -> Tuple[bool, str]:
+        """Validate file path access"""
+        try:
+            p = Path(path).resolve()
+            if str(p) == "/":
+                return False, "Cannot access root directory"
+            if allowed_root:
+                root = Path(allowed_root).resolve()
+                try:
+                    p.relative_to(root)
+                except ValueError:
+                    return False, f"Path outside allowed root"
+            return True, "Path valid"
+        except Exception as e:
+            return False, f"Path validation error: {e}"
+
+
+class EtherConsciousness:
+    """
+    Main Consciousness Engine - The Brain of Ether
+    
+    Unifies:
+    - Memory (Hippocampus)
+    - Cognition (Cortex)
+    - Action (EffectorRegistry)
+    - Safety (SafetyGuard)
+    """
+    
+    def __init__(self, project_root: str = None):
+        self.project_root = Path(project_root) if project_root else Path.cwd()
+        self.hippocampus = Hippocampus()
+        self.cortex = Cortex()
+        self.effectors = EffectorRegistry()
+        self.safety = SafetyGuard()
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.conversation_history: List[Dict[str, Any]] = []
+        
+        logger.info(f"EtherConsciousness initialized (Session: {self.session_id})")
+
+    def process_query(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Main entry point: Process user query through consciousness loop"""
+        start_time = datetime.now()
+        
+        # Step 1: Classify Intent
+        intent, confidence = self.cortex.classify_intent(query)
+        
+        # Step 2: Retrieve Context from Memory
+        memory_context = self.hippocampus.get_context(query)
+        
+        # Step 3: Find Relevant Skills
+        keywords = query.split()
+        relevant_skills = self.effectors.find_relevant_skills(intent, keywords)
+        
+        # Step 4: Execute or Respond
+        response = self._execute_intent(intent, query, relevant_skills, memory_context, context or {})
+        
+        # Step 5: Store in Memory
+        self.hippocampus.add_to_working(
+            content=f"Query: {query}\nResponse: {response.get('output', '')}",
+            metadata={"intent": intent, "skills_used": [s.name for s in relevant_skills]}
+        )
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        result = {
+            "session_id": self.session_id,
+            "query": query,
+            "intent": intent,
+            "confidence": confidence,
+            "output": response.get("output", ""),
+            "skills_used": [s.name for s in relevant_skills],
+            "duration_ms": duration * 1000,
+            "success": response.get("success", False),
+            "error": response.get("error")
+        }
+        
+        self.conversation_history.append(result)
+        return result
+
+    def _execute_intent(self, intent: str, query: str, skills: List[ToolSkill], context: str, user_context: Dict) -> Dict[str, Any]:
+        """Execute based on classified intent"""
+        if intent == "chat":
+            return self._handle_chat(query, context)
+            
+        if not skills:
+            return {"success": False, "output": "No relevant tools found", "error": "No skills"}
+        
+        primary_skill = skills[0]
+        handler = self.effectors.load_handler(primary_skill.name)
+        
+        if not handler:
+            return {"success": False, "output": f"Tool {primary_skill.name} not available", "error": "No handler"}
+        
+        params = self._extract_parameters(primary_skill, query, user_context)
+        is_safe, msg = self._validate_inputs(params)
+        if not is_safe:
+            return {"success": False, "output": "", "error": msg}
+        
+        try:
+            result = handler(**params)
+            return {"success": True, "output": str(result), "skill": primary_skill.name}
+        except Exception as e:
+            return {"success": False, "output": "", "error": str(e)}
+
+    def _handle_chat(self, query: str, context: str) -> Dict[str, Any]:
+        """Handle general chat queries"""
+        response = f"I understand you're asking: '{query}'"
+        if context:
+            response += f"\nContext: {context}"
+        return {"success": True, "output": response}
+
+    def _extract_parameters(self, skill: ToolSkill, query: str, user_context: Dict) -> Dict:
+        """Extract parameters for skill execution"""
+        params = {}
+        for param_name in skill.input_schema.keys():
+            if param_name in user_context:
+                params[param_name] = user_context[param_name]
+        
+        if "path" in skill.input_schema and not params.get("path"):
+            path_match = re.search(r'[/\\][\w./\\-]+', query)
+            params["path"] = path_match.group() if path_match else str(self.project_root)
+                
+        if "code" in skill.input_schema and not params.get("code"):
+            code_match = re.search(r'```(?:gdscript)?\n(.*?)```', query, re.DOTALL)
+            if code_match:
+                params["code"] = code_match.group(1)
+                
+        return params
+
+    def _validate_inputs(self, params: Dict) -> Tuple[bool, str]:
+        """Validate extracted inputs"""
+        for key, value in params.items():
+            if isinstance(value, str):
+                if key in ["code", "script"]:
+                    is_safe, msg = self.safety.validate_code(value)
+                    if not is_safe:
+                        return False, msg
+                elif key in ["path", "file", "directory"]:
+                    is_safe, msg = self.safety.validate_path(value, str(self.project_root))
+                    if not is_safe:
+                        return False, msg
+        return True, "All inputs valid"
+
+    def learn_from_feedback(self, query: str, was_helpful: bool, correct_intent: str = None):
+        """Learn from user feedback"""
+        if correct_intent:
+            self.cortex.add_feedback(query, correct_intent)
+        if self.hippocampus.working_memory:
+            factor = 1.2 if was_helpful else 0.8
+            self.hippocampus.working_memory[-1].relevance_score *= factor
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get consciousness status"""
+        return {
+            "session_id": self.session_id,
+            "working_memory_size": len(self.hippocampus.working_memory),
+            "long_term_memory_size": len(self.hippocampus.long_term_memory),
+            "registered_skills": list(self.effectors.skills.keys()),
+            "conversation_turns": len(self.conversation_history),
+            "ml_available": ML_AVAILABLE
+        }
+
+
+# Singleton instance
+_consciousness_instance: Optional[EtherConsciousness] = None
+
+def get_consciousness(project_root: str = None) -> EtherConsciousness:
+    """Get or create singleton consciousness instance"""
+    global _consciousness_instance
+    if _consciousness_instance is None:
+        _consciousness_instance = EtherConsciousness(project_root)
+    return _consciousness_instance
