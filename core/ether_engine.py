@@ -63,7 +63,7 @@ class EtherEngine:
             return
         
         # Import here to avoid circular dependencies and enable lazy loading
-        from core.builder import EtherBrain
+        from core.cortex import EtherBrain
         from utils.project_loader import LazyProjectLoader
         
         self._brain = EtherBrain()

@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-# Import EtherBrain from core.builder
-from core.builder import EtherBrain
+# Import EtherBrain from core.cortex (unified brain)
+from core.cortex import EtherBrain
 
 
 class EtherCLI:

@@ -575,3 +575,14 @@ def get_cortex(project_root: str = None) -> Cortex:
     if _cortex_instance is None:
         _cortex_instance = Cortex(project_root)
     return _cortex_instance
+
+
+# ── ALIAS FOR BACKWARD COMPATIBILITY ─────────────────────────────────────
+# Export run_pipeline from builder.py for backward compatibility
+# This allows code to import run_pipeline from cortex.py while it still lives in builder.py
+
+from .builder import run_pipeline
+
+
+# Alias for backward compatibility
+from .builder import run_pipeline

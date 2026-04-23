@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Any
 from datetime import datetime
 
-# Import EtherBrain - the new optimized engine
-from core.builder import EtherBrain
+# Import EtherBrain - the unified cortex engine
+from core.cortex import EtherBrain
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -555,7 +555,7 @@ def _tab_chat():
                 )
 
             try:
-                from core.builder import run_pipeline
+                from core.cortex import run_pipeline
                 context = ""
                 if brain.project_loader:
                     context = brain.project_loader.build_lightweight_context(task)
@@ -864,7 +864,7 @@ def _tab_files():
 
 def _tab_memory():
     """Display Hippocampus memory buffers (sanitized)."""
-    from ether.core.consciousness import get_consciousness
+    from ether.core.cortex import get_consciousness
     
     st.markdown("## 🧠 Memory Inspection")
     
