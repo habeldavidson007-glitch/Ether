@@ -8,18 +8,14 @@ NOTE: cortex.py is now the primary import location for the consolidated brain.
 This module maintains backward compatibility by re-exporting from consciousness.py.
 """
 
-# Primary imports from cortex (the new consolidated brain)
-from .cortex import (
+# Primary imports from consciousness (the actual implementation)
+from .consciousness import (
     Cortex,
     EtherConsciousness,
     Hippocampus,
     EffectorRegistry,
     SafetyGuard,
-    get_consciousness
-)
-
-# Also export from consciousness for direct access
-from .consciousness import (
+    get_consciousness,
     detect_ram_and_suggest_model,
     GODOT_KEYWORDS,
     ML_AVAILABLE,
@@ -29,14 +25,14 @@ from .consciousness import (
 )
 
 __all__ = [
-    # Main classes (from cortex.py)
+    # Main classes
     "Cortex",
     "EtherConsciousness", 
     "Hippocampus",
     "EffectorRegistry",
     "SafetyGuard",
     "get_consciousness",
-    # Utilities (from consciousness.py)
+    # Utilities
     "detect_ram_and_suggest_model",
     "GODOT_KEYWORDS",
     "ML_AVAILABLE",
