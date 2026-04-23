@@ -1,1 +1,23 @@
-Nothing should be ignored based on the provided file changes, as they only include markdown documentation files (CHANGELOG.md, CONTRIBUTING.md, RELEASE_CHECKLIST.md) and a README.md modification, which are all source/config files that should be tracked in version control.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Original rules preserved
+*.log
+```

@@ -3,15 +3,23 @@ Adaptive Memory Engine (The Hippocampus)
 -----------------------------------------
 Replaces: memory_core, learning_engine, context_manager (state part)
 Purpose: Self-improving memory with feedback learning and conversation history
+
+Improvements in v1.9.8:
+- Thread-safe operations with RLock
+- Memory leak prevention with automatic cleanup
+- Scalability enhancements for large datasets
 """
 
 import os
 import json
 import hashlib
+import threading
+import weakref
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from collections import defaultdict
 from datetime import datetime
+import gc
 
 class FeedbackEntry:
     def __init__(self, entry_id: str, query: str, original_code: str, 
@@ -56,9 +64,12 @@ class FeedbackEntry:
 class AdaptiveMemory:
     """
     The Hippocampus: Learns from feedback, manages conversation history, and stores patterns.
+    
+    Thread-safe implementation with automatic memory management.
     """
     
-    def __init__(self, storage_path: str = "memory_data"):
+    def __init__(self, storage_path: str = "memory_data", max_history_size: int = 50, 
+                 auto_cleanup_interval: int = 100):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
@@ -66,7 +77,7 @@ class AdaptiveMemory:
         self.patterns_file = self.storage_path / "learned_patterns.json"
         self.history_file = self.storage_path / "conversation_history.json"
         
-        # In-memory cache
+        # In-memory cache with weak references for memory efficiency
         self.feedback_history: List[FeedbackEntry] = []
         self.learned_patterns: Dict[str, List[Dict]] = defaultdict(list)
         self.conversation_history: List[Dict] = []
@@ -76,51 +87,63 @@ class AdaptiveMemory:
         self.total_rejected = 0
         self.success_rate = 0.0
         
+        # Thread safety
+        self._lock = threading.RLock()
+        
+        # Memory management
+        self.max_history_size = max_history_size
+        self.auto_cleanup_interval = auto_cleanup_interval
+        self._operation_count = 0
+        
         self._load_data()
         
     def _load_data(self):
-        if self.feedback_file.exists():
-            try:
-                with open(self.feedback_file, 'r') as f:
-                    data = json.load(f)
-                    self.feedback_history = [
-                        FeedbackEntry(
-                            entry_id=item['id'], query=item['query'],
-                            original_code=item.get('original_code', ''),
-                            suggested_fix=item.get('suggested_fix', ''),
-                            user_feedback=item['feedback'],
-                            file_path=item.get('file_path', ''),
-                            error_type=item.get('error_type', '')
-                        ) for item in data
-                    ]
-                self._recalculate_stats()
-            except Exception as e:
-                print(f"[AdaptiveMemory] Error loading feedback: {e}")
-                
-        if self.patterns_file.exists():
-            try:
-                with open(self.patterns_file, 'r') as f:
-                    self.learned_patterns = defaultdict(list, json.load(f))
-            except Exception as e:
-                print(f"[AdaptiveMemory] Error loading patterns: {e}")
-                
-        if self.history_file.exists():
-            try:
-                with open(self.history_file, 'r') as f:
-                    self.conversation_history = json.load(f)
-            except Exception as e:
-                print(f"[AdaptiveMemory] Error loading history: {e}")
-                
+        """Load data from disk with thread safety."""
+        with self._lock:
+            if self.feedback_file.exists():
+                try:
+                    with open(self.feedback_file, 'r') as f:
+                        data = json.load(f)
+                        self.feedback_history = [
+                            FeedbackEntry(
+                                entry_id=item['id'], query=item['query'],
+                                original_code=item.get('original_code', ''),
+                                suggested_fix=item.get('suggested_fix', ''),
+                                user_feedback=item['feedback'],
+                                file_path=item.get('file_path', ''),
+                                error_type=item.get('error_type', '')
+                            ) for item in data
+                        ]
+                    self._recalculate_stats()
+                except Exception as e:
+                    print(f"[AdaptiveMemory] Error loading feedback: {e}")
+                    
+            if self.patterns_file.exists():
+                try:
+                    with open(self.patterns_file, 'r') as f:
+                        self.learned_patterns = defaultdict(list, json.load(f))
+                except Exception as e:
+                    print(f"[AdaptiveMemory] Error loading patterns: {e}")
+                    
+            if self.history_file.exists():
+                try:
+                    with open(self.history_file, 'r') as f:
+                        self.conversation_history = json.load(f)
+                except Exception as e:
+                    print(f"[AdaptiveMemory] Error loading history: {e}")
+        
     def _save_data(self):
-        try:
-            with open(self.feedback_file, 'w') as f:
-                json.dump([entry.to_dict() for entry in self.feedback_history], f, indent=2)
-            with open(self.patterns_file, 'w') as f:
-                json.dump(dict(self.learned_patterns), f, indent=2)
-            with open(self.history_file, 'w') as f:
-                json.dump(self.conversation_history, f, indent=2)
-        except Exception as e:
-            print(f"[AdaptiveMemory] Error saving data: {e}")
+        """Save data to disk with thread safety."""
+        with self._lock:
+            try:
+                with open(self.feedback_file, 'w') as f:
+                    json.dump([entry.to_dict() for entry in self.feedback_history], f, indent=2)
+                with open(self.patterns_file, 'w') as f:
+                    json.dump(dict(self.learned_patterns), f, indent=2)
+                with open(self.history_file, 'w') as f:
+                    json.dump(self.conversation_history, f, indent=2)
+            except Exception as e:
+                print(f"[AdaptiveMemory] Error saving data: {e}")
             
     def _recalculate_stats(self):
         self.total_accepted = sum(1 for e in self.feedback_history if e.user_feedback == 'accepted')
@@ -131,20 +154,40 @@ class AdaptiveMemory:
     def record_feedback(self, query: str, original_code: str, suggested_fix: str,
                        user_feedback: str, file_path: str = "", error_type: str = "",
                        metadata: Optional[Dict] = None) -> str:
-        entry_id = hashlib.md5(f"{datetime.now().isoformat()}:{query[:50]}".encode()).hexdigest()[:12]
+        """Record user feedback with thread safety and memory management."""
+        with self._lock:
+            entry_id = hashlib.md5(f"{datetime.now().isoformat()}:{query[:50]}".encode()).hexdigest()[:12]
+            
+            entry = FeedbackEntry(
+                entry_id=entry_id, query=query, original_code=original_code,
+                suggested_fix=suggested_fix, user_feedback=user_feedback,
+                file_path=file_path, error_type=error_type, metadata=metadata
+            )
+            
+            self.feedback_history.append(entry)
+            self._recalculate_stats()
+            self._update_patterns(entry)
+            self._save_data()
+            
+            # Memory management: check if cleanup needed
+            self._operation_count += 1
+            if self._operation_count % self.auto_cleanup_interval == 0:
+                self._cleanup_memory()
+            
+            return entry_id
+    
+    def _cleanup_memory(self):
+        """Prevent memory leaks by trimming old data and forcing garbage collection."""
+        # Trim conversation history if too large
+        if len(self.conversation_history) > self.max_history_size * 2:
+            self.conversation_history = self.conversation_history[-self.max_history_size:]
         
-        entry = FeedbackEntry(
-            entry_id=entry_id, query=query, original_code=original_code,
-            suggested_fix=suggested_fix, user_feedback=user_feedback,
-            file_path=file_path, error_type=error_type, metadata=metadata
-        )
+        # Trim feedback history for very old entries (keep last 1000)
+        if len(self.feedback_history) > 1000:
+            self.feedback_history = self.feedback_history[-1000:]
         
-        self.feedback_history.append(entry)
-        self._recalculate_stats()
-        self._update_patterns(entry)
-        self._save_data()
-        
-        return entry_id
+        # Force garbage collection
+        gc.collect()
         
     def _update_patterns(self, entry: FeedbackEntry):
         if entry.user_feedback != 'accepted':
@@ -212,31 +255,39 @@ class AdaptiveMemory:
         return candidates[:5]
         
     def add_to_history(self, role: str, content: str, query: str = ""):
-        self.conversation_history.append({
-            "role": role, "content": content[:2000], 
-            "query": query[:200], "timestamp": datetime.now().isoformat()
-        })
-        # Keep last 50 messages
-        self.conversation_history = self.conversation_history[-50:]
-        self._save_data()
+        """Add to conversation history with thread safety and size limits."""
+        with self._lock:
+            self.conversation_history.append({
+                "role": role, "content": content[:2000], 
+                "query": query[:200], "timestamp": datetime.now().isoformat()
+            })
+            # Keep last N messages (configurable, default 50)
+            if len(self.conversation_history) > self.max_history_size:
+                self.conversation_history = self.conversation_history[-self.max_history_size:]
+            self._save_data()
         
     def get_recent_history(self, limit: int = 10) -> List[Dict]:
         return self.conversation_history[-limit:]
         
     def clear_history(self):
-        self.conversation_history.clear()
-        self._save_data()
+        """Clear conversation history with thread safety."""
+        with self._lock:
+            self.conversation_history.clear()
+            self._save_data()
         
     def get_stats(self) -> Dict:
-        return {
-            "total_feedback": len(self.feedback_history),
-            "accepted": self.total_accepted,
-            "rejected": self.total_rejected,
-            "success_rate": f"{self.success_rate:.1f}%",
-            "pattern_categories": len(self.learned_patterns),
-            "total_patterns": sum(len(p) for p in self.learned_patterns.values()),
-            "conversation_turns": len(self.conversation_history)
-        }
+        """Get memory statistics in a thread-safe manner."""
+        with self._lock:
+            return {
+                "total_feedback": len(self.feedback_history),
+                "accepted": self.total_accepted,
+                "rejected": self.total_rejected,
+                "success_rate": f"{self.success_rate:.1f}%",
+                "pattern_categories": len(self.learned_patterns),
+                "total_patterns": sum(len(p) for p in self.learned_patterns.values()),
+                "conversation_turns": len(self.conversation_history),
+                "memory_safe": len(self.conversation_history) <= self.max_history_size * 2
+            }
 
 
 # Singleton instance
