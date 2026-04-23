@@ -271,7 +271,7 @@ class KnowledgeFetcher:
         return count
     
     def _fetch_web_sources(self) -> int:
-        """Fetch from general web sources."""
+        """Fetch from general web sources with distillation."""
         count = 0
         
         available_sources = [s for s in WEB_SOURCES if self.should_fetch_source(s['id'])]
@@ -284,13 +284,18 @@ class KnowledgeFetcher:
         try:
             logger.info(f"Fetching web source: {source['name']} ({source['url']})")
             
-            # In full implementation, would use fetcher with distiller
-            # For now, simple fetch
             response = self.session.get(source['url'], timeout=10)
             response.raise_for_status()
             
-            # Simple extraction (full implementation would use distiller)
-            content = f"Source: {source['name']}\nURL: {source['url']}\n\n{response.text[:2000]}..."
+            # DISTILLER INTEGRATION: Clean raw HTML before storage
+            distilled_content = self._distill_content(response.text, source_type="web")
+            
+            if not distilled_content or len(distilled_content) < 50:
+                logger.warning(f"Distillation produced too little content for {source['name']}")
+                return 0
+            
+            # Create structured content
+            content = f"Source: {source['name']}\nURL: {source['url']}\n\n{distilled_content}"
             
             content_hash = hashlib.md5(content.encode()).hexdigest()
             if content_hash in self.fetched_hashes:
@@ -299,6 +304,12 @@ class KnowledgeFetcher:
             self.fetched_hashes.add(content_hash)
             self.last_fetch[source['id']] = datetime.now()
             
+            # Log compression stats
+            original_len = len(response.text)
+            distilled_len = len(distilled_content)
+            ratio = distilled_len / max(original_len, 1)
+            logger.info(f"Distilled {source['name']}: {original_len} → {distilled_len} chars ({ratio:.1%} retained)")
+            
             self._store_knowledge(source['name'], content, "web")
             count = 1
             
@@ -306,6 +317,53 @@ class KnowledgeFetcher:
             logger.error(f"Failed to fetch web source {source['url']}: {e}")
         
         return count
+    
+    def _distill_content(self, raw_content: str, source_type: str = "web") -> str:
+        """
+        Distill raw content using the Distiller module.
+        
+        Args:
+            raw_content: Raw HTML or text from web fetcher
+            source_type: Type of source (web, rss, wiki, etc.)
+            
+        Returns:
+            Cleaned, distilled knowledge text
+        """
+        try:
+            # Import distiller lazily to avoid circular imports
+            from .distiller import Distiller
+            
+            distiller = Distiller(min_paragraph_length=20, max_paragraphs=30)
+            distilled = distiller.distill(raw_content, source_type)
+            
+            return distilled
+            
+        except ImportError as e:
+            logger.warning(f"Distiller not available, using fallback: {e}")
+            # Fallback: simple text extraction
+            import re
+            from html.parser import HTMLParser
+            
+            class TextExtractor(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.text = []
+                def handle_data(self, data):
+                    self.text.append(data)
+                def get_text(self):
+                    return ' '.join(self.text)
+            
+            extractor = TextExtractor()
+            extractor.feed(raw_content)
+            text = extractor.get_text()
+            
+            # Basic cleaning
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text[:3000]  # Limit fallback output
+            
+        except Exception as e:
+            logger.error(f"Distillation failed: {e}")
+            return ""
     
     def _store_knowledge(self, topic: str, content: str, source_type: str):
         """Store knowledge in Hippocampus or adaptive memory."""

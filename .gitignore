@@ -1,9 +1,16 @@
-```
-# Python
-__pycache__/
+```gitignore
+# Compiled and build artifacts
 *.pyc
-*.pyo
-*.pyd
+__pycache__/
+*.o
+*.obj
+dist/
+build/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
 
 # Logs and temp files
 *.log
@@ -19,13 +26,28 @@ __pycache__/
 .vscode/
 .idea/
 
-# Dependencies
-.venv/
-venv/
-node_modules/
+# Coverage
+.coverage
+coverage/
+htmlcov/
 
-# Build artifacts
-dist/
-build/
-target/
+# Python specific
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+.eggs/
+
+# System files
+.DS_Store
+Thumbs.db
+```
+
+Wait, let me reconsider. The added files are just markdown files and the modified files are Python source files. There are no build artifacts, dependency directories, or temporary files in the changes shown. This appears to be just source code changes.
+
+```gitignore
+
 ```
