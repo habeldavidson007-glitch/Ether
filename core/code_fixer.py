@@ -12,8 +12,8 @@
 """
 
 import re
-import os
 import shutil
+from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
 
@@ -40,7 +40,7 @@ class CodeFixer:
             return code, []
         
         # Create backup before any changes
-        if file_path and os.path.exists(file_path):
+        if file_path and Path(file_path).exists():
             self._create_backup(file_path)
         
         # Apply fixes in order
@@ -76,7 +76,7 @@ class CodeFixer:
         try:
             shutil.copy2(file_path, backup_path)
             self.backup_created = True
-            self.fixes_applied.append(f"✓ Backup created: {os.path.basename(backup_path)}")
+            self.fixes_applied.append(f"✓ Backup created: {Path(backup_path).name}")
         except Exception as e:
             pass  # Silent fail if backup fails
     
@@ -282,7 +282,7 @@ def apply_fixes(code: str, file_path: str = "") -> Tuple[str, List[str]]:
 
 def fix_file(file_path: str) -> bool:
     """Fix a file in place"""
-    if not os.path.exists(file_path):
+    if not Path(file_path).exists():
         return False
     
     try:
