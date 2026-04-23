@@ -32,6 +32,7 @@ import logging
 import requests
 import threading
 import subprocess
+import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -44,6 +45,121 @@ from .feedback_commands import get_feedback_manager
 
 # Setup logger
 logger = logging.getLogger(__name__)
+
+
+# ── DYNAMIC TEMPERATURE ENGINE (Phase 11.1) ─────────────────────────────────────
+# Adjusts creativity vs precision based on intent and conversation context
+
+def get_dynamic_temperature(intent: str, query: str, conversation_history: List[Dict] = None) -> Tuple[float, bool]:
+    """
+    Dynamically adjust temperature based on intent and context.
+    
+    Returns: (temperature, use_n_sampling)
+    
+    Logic:
+    - Debug/Fix: Low temp (0.2) for precision
+    - Creative/Build: High temp (0.7-0.8) for diversity
+    - Explain: Medium temp (0.4-0.5) for clarity
+    - Chat: Variable based on conversation flow
+    
+    N-Sampling: For creative tasks, generate 2-3 variants and pick best
+    """
+    query_lower = query.lower()
+    
+    # Precision-critical tasks
+    if intent in ['debug', 'fix'] or any(word in query_lower for word in ['error', 'bug', 'broken', 'crash', 'fix']):
+        return 0.2, False  # Deterministic, no variation
+    
+    # Creative tasks benefit from diversity
+    if intent in ['build', 'create'] or any(word in query_lower for word in ['create', 'make', 'design', 'implement', 'new feature']):
+        return 0.75, True  # High creativity with N-sampling
+    
+    # Explanations need clarity but some variety
+    if intent == 'explain' or any(word in query_lower for word in ['explain', 'what is', 'how does', 'why']):
+        return 0.45, False  # Balanced clarity
+    
+    # Analysis needs moderate creativity
+    if intent == 'analyze' or any(word in query_lower for word in ['analyze', 'review', 'optimize', 'improve']):
+        return 0.5, False  # Moderate balance
+    
+    # Chat/conversation - adapt based on history
+    if intent == 'chat':
+        if conversation_history and len(conversation_history) > 3:
+            # Long conversation - add variety to prevent repetition
+            return 0.65, True
+        else:
+            # Short conversation - stay focused
+            return 0.5, False
+    
+    # Default: balanced
+    return 0.5, False
+
+
+def generate_follow_up_questions(query: str, response_text: str, intent: str) -> List[str]:
+    """
+    Generate 2-3 natural follow-up questions to make conversation feel autonomous.
+    
+    Uses template-based generation with variability to avoid repetition.
+    """
+    follow_ups = []
+    query_lower = query.lower()
+    
+    # Intent-specific follow-ups
+    if intent in ['debug', 'fix']:
+        templates = [
+            "Would you like me to explain why this fix works?",
+            "Should I check other files for similar issues?",
+            "Do you want me to add error handling for this case?",
+            "Would you like to see alternative approaches?",
+        ]
+    elif intent == 'explain':
+        templates = [
+            "Would you like a code example showing this in action?",
+            "Should I explain how this compares to similar concepts?",
+            "Do you want to know common pitfalls with this?",
+            "Would you like to see advanced usage patterns?",
+        ]
+    elif intent in ['build', 'create']:
+        templates = [
+            "Should I add comments to explain the implementation?",
+            "Would you like me to create unit tests for this?",
+            "Do you want to see how to integrate this with other systems?",
+            "Should I optimize this for performance?",
+        ]
+    elif intent == 'analyze':
+        templates = [
+            "Would you like me to suggest specific improvements?",
+            "Should I create a prioritized action plan?",
+            "Do you want me to check for security vulnerabilities?",
+            "Would you like a detailed report on code quality?",
+        ]
+    else:  # chat/general
+        templates = [
+            "What specific aspect would you like to explore?",
+            "Should I provide more details on any part?",
+            "Is there a related topic you'd like to discuss?",
+            "Would you like practical examples?",
+        ]
+    
+    # Randomly select 2-3 follow-ups
+    num_followups = random.randint(2, 3)
+    selected = random.sample(templates, min(num_followups, len(templates)))
+    
+    # Add variability by occasionally rephrasing
+    if random.random() > 0.7 and selected:
+        # Rephrase one randomly
+        idx = random.randint(0, len(selected) - 1)
+        variations = {
+            "Would you like": "Do you want me to",
+            "Should I": "Want me to",
+            "Do you want": "Would you prefer",
+        }
+        for old, new in variations.items():
+            if selected[idx].startswith(old):
+                selected[idx] = selected[idx].replace(old, new, 1)
+                break
+    
+    return selected
 
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
@@ -820,13 +936,15 @@ def _call_with_enforced_timeout(model: str, payload: dict, timeout: int) -> Opti
     return result["response"]
 
 
-def _call(role: str, messages: List[Dict]) -> str:
+def _call(role: str, messages: List[Dict], temperature: float = None, use_n_sampling: bool = False) -> str:
     """
     Call Ollama with the model assigned to this role.
     Uses Windows-safe subprocess execution with HARD kill capability.
     
     CRITICAL FIX for v1.9: Replaces blocking HTTP calls with subprocess.Popen
     that can be killed exactly at timeout limit.
+    
+    Phase 11.1: Added dynamic temperature and N-sampling support.
     """
     model = MODELS.get(role, MODELS["chat"])
     timeout = TIMEOUT.get(role, 30)
@@ -1952,6 +2070,7 @@ class EtherBrain:
         Slow Path: Analysis, coding, debugging → full LLM pipeline
         
         OFF-DOMAIN GUARD: Rejects non-Godot queries before hitting LLM.
+        Phase 11.1: Added dynamic temperature and auto follow-ups.
         
         Returns: (result_dict, log_list)
         """
@@ -2008,12 +2127,18 @@ class EtherBrain:
             # FAST PATH: Quick definition/explanation without LLM
             step("⚡ Fast path (explain)")
             response = get_fast_response(fast_intent, query, self.project_stats)
-            return {"type": "chat", "text": response, "fast_path": True}, log
+            # PHASE 11.1: Add follow-up questions to make it conversational
+            follow_ups = generate_follow_up_questions(query, response, fast_intent)
+            return {"type": "chat", "text": response, "fast_path": True, "follow_ups": follow_ups}, log
         
         else:
             # SLOW PATH: Complex intent requires LLM
             # Determine complex intent type (analyze, debug, build, chat)
             complex_intent = self._classify_complex_intent(query)
+            
+            # PHASE 11.1: Get dynamic temperature based on intent
+            temperature, use_n_sampling = get_dynamic_temperature(complex_intent, query, self.history)
+            step(f"🎨 Temperature: {temperature:.2f}" + (" (N-sampling)" if use_n_sampling else ""))
             
             # Get context lazily (only loads relevant files)
             context = ""
