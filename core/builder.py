@@ -28,6 +28,7 @@ import json
 import re
 import time
 import hashlib
+import logging
 import requests
 import threading
 import subprocess
@@ -40,6 +41,9 @@ from .unified_search import get_unified_search
 from .adaptive_memory import get_adaptive_memory
 from .safety_preview import get_safety_preview
 from .feedback_commands import get_feedback_manager
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
@@ -270,9 +274,46 @@ def lightweight_analyzer(code: str) -> list:
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# OPTIMIZED CONFIG FOR 2GB RAM - STRICT LIMITS TO PREVENT TIMEOUTS
-PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
-FALLBACK_MODEL = "gemma:2b"
+# RAM-AWARE MODEL SELECTION
+def detect_ram_and_suggest_model():
+    """
+    Detect available RAM and suggest appropriate model.
+    Returns: (model_name, ram_gb)
+    
+    Model recommendations:
+    - <= 2GB RAM: qwen2.5-coder:1.5b-instruct-q4_k_m (~1.2GB)
+    - <= 4GB RAM: qwen2.5-coder:3b-instruct-q4_k_m (~2.5GB) 
+    - > 4GB RAM: qwen2.5-coder:7b-instruct-q4_k_m (~5GB)
+    """
+    try:
+        import psutil
+        available_ram_gb = psutil.virtual_memory().available / (1024**3)
+        
+        if available_ram_gb > 6:
+            return "qwen2.5-coder:7b-instruct-q4_k_m", available_ram_gb
+        elif available_ram_gb > 3:
+            return "qwen2.5-coder:3b-instruct-q4_k_m", available_ram_gb
+        else:
+            return "qwen2.5-coder:1.5b-instruct-q4_k_m", available_ram_gb
+    except ImportError:
+        # Fallback if psutil not available
+        return "qwen2.5-coder:1.5b-instruct-q4_k_m", 2.0
+
+
+# AUTO-DETECT MODEL BASED ON RAM
+RECOMMENDED_MODEL, AVAILABLE_RAM_GB = detect_ram_and_suggest_model()
+
+# Log model selection decision
+print(f"[CONFIG] Available RAM: {AVAILABLE_RAM_GB:.2f} GB")
+print(f"[CONFIG] Selected model: {RECOMMENDED_MODEL}")
+if AVAILABLE_RAM_GB <= 2:
+    print(f"[CONFIG] Note: Limited RAM detected. Consider closing other applications for better performance.")
+elif AVAILABLE_RAM_GB > 6:
+    print(f"[CONFIG] Good! Sufficient RAM for larger models. You can manually upgrade to 7B model if desired.")
+
+# OPTIMIZED CONFIG - Uses auto-detected model
+PRIMARY_MODEL = RECOMMENDED_MODEL
+FALLBACK_MODEL = "gemma:2b" if RECOMMENDED_MODEL != "gemma:2b" else "qwen2.5-coder:1.5b-instruct-q4_k_m"
 
 MODELS = {
     "generate": PRIMARY_MODEL,
@@ -422,6 +463,71 @@ _GREETING_RE   = [re.compile(p, re.IGNORECASE) for p in _GREETING_PATTERNS]
 _STATUS_RE     = [re.compile(p, re.IGNORECASE) for p in _STATUS_PATTERNS]
 _QUICK_HELP_RE = [re.compile(p, re.IGNORECASE) for p in _QUICK_HELP_PATTERNS]
 _EXPLAIN_RE    = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
+
+
+def is_godot_related(query: str) -> bool:
+    """
+    Check if query is related to Godot/GDScript development.
+    
+    Uses lightweight keyword/heuristic check first, then falls back to 
+    intent classification confidence for ambiguous cases.
+    
+    Keywords: godot, gdscript, scene, node, shader, tscn, gdextension, engine
+    
+    Returns: True if Godot-related, False otherwise
+    """
+    GODOT_KEYWORDS = [
+        "godot", "gdscript", "scene", "node", "shader", "tscn", 
+        "gdextension", "engine", "characterbody", "area2d", "area3d",
+        "kinematic", "rigidbody", "sprite", "texture", "viewport",
+        "signal", "export", "@export", "@onready", "_ready", "_process",
+        "_physics_process", "func ", "var ", "extends ", "class_name",
+        "instancerate", "preload", "load(", "get_node", "$", "yield",
+        "await ", " tween", "animation", "collision", "hitbox", "hurtbox"
+    ]
+    
+    NON_GODOT_TOPICS = [
+        "brownie", "banana", "recipe", "cooking", "baking",
+        "python script", "django", "flask", "fastapi",
+        "javascript", "react", "vue", "angular",
+        "unity", "unreal", "game maker",
+        "photoshop", "blender", "illustrator"
+    ]
+    
+    query_lower = query.lower()
+    
+    # Check for non-Godot topics first (explicit rejection)
+    for topic in NON_GODOT_TOPICS:
+        if topic in query_lower:
+            # But allow if it's clearly about Godot integration
+            if "godot" not in query_lower and "gdscript" not in query_lower:
+                return False
+    
+    # Count Godot keywords
+    keyword_matches = sum(1 for kw in GODOT_KEYWORDS if kw in query_lower)
+    
+    # Strong match: 2+ keywords or any very specific term
+    if keyword_matches >= 2:
+        return True
+    
+    # Single keyword match - check context
+    if keyword_matches == 1:
+        # If it contains programming terms, likely Godot-related
+        if any(term in query_lower for term in ["code", "script", "function", "error", "bug", "fix"]):
+            return True
+    
+    # Ambiguous case - use intent detection as fallback
+    # Complex queries without clear Godot context are likely off-domain
+    intent = detect_intent_fast(query)
+    if intent == 'complex':
+        # For complex queries, require at least some Godot context
+        # Check if query mentions common Godot patterns
+        godot_patterns = ["func ", "var ", "extends", "signal", "node", "scene"]
+        if any(pattern in query_lower for pattern in godot_patterns):
+            return True
+    
+    # Default: assume not Godot-related if no clear indicators
+    return keyword_matches > 0
 
 
 def detect_intent_fast(query: str) -> str:
@@ -1310,7 +1416,20 @@ def run_pipeline(
     elif intent in ("explain", "analyze"):
         step("Explaining...")
         try:
-            text = _explain(task, context)
+            # Pass search_engine if available (from Builder instance)
+            # This enables knowledge base integration for conceptual questions
+            from .unified_search import get_unified_search
+            search_engine = None
+            try:
+                # Try to get search engine from global state or create one
+                import os
+                cwd = os.getcwd()
+                if os.path.exists(os.path.join(cwd, "knowledge_base")):
+                    search_engine = get_unified_search(cwd)
+            except:
+                pass  # Continue without KB if unavailable
+            
+            text = _explain(task, context, search_engine=search_engine)
             return {"type": "chat", "text": text}, log
         except Exception as e:
             return {"type": "chat", "text": f"Explain error: {e}"}, log
@@ -1832,6 +1951,8 @@ class EtherBrain:
         Fast Path: Greetings, status, quick help → instant response (<2s)
         Slow Path: Analysis, coding, debugging → full LLM pipeline
         
+        OFF-DOMAIN GUARD: Rejects non-Godot queries before hitting LLM.
+        
         Returns: (result_dict, log_list)
         """
         log = []
@@ -1840,6 +1961,19 @@ class EtherBrain:
             log.append(name)
             if yield_steps:
                 yield_steps(name)
+        
+        # STEP 0: OFF-DOMAIN GUARD - Filter non-Godot queries
+        if not is_godot_related(query):
+            step("🚫 Off-domain query detected")
+            # Extract topic from query for polite refusal
+            # Find first significant word that's not a common English word
+            stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
+            words = query.lower().split()
+            topic_words = [w for w in words if w not in stop_words and len(w) > 3]
+            topic = topic_words[0] if topic_words else "that topic"
+            
+            refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
+            return {"type": "chat", "text": refusal, "fast_path": True}, log
         
         # STEP 1: Detect intent using fast regex patterns
         fast_intent = detect_intent_fast(query)
