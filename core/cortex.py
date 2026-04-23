@@ -542,28 +542,58 @@ class Cortex:
         return "\n\n".join(context_parts)
     
     def _run_analyze_pipeline(self, query: str, context: str, step) -> Dict:
-        """Run analysis pipeline"""
+        """Run analysis pipeline - wired to builder.py"""
         step("🔍 Analyzing...")
-        # Placeholder - would integrate with static analyzer
-        return {"type": "analysis", "text": f"Analysis of: {query}\n\nContext loaded: {len(context)} chars"}
+        # Delegate to builder.py's analyze function
+        from .builder import analyze
+        try:
+            result_text = analyze(query, context, self.conversation_history)
+            return {"type": "analysis", "text": result_text}
+        except Exception as e:
+            logger.error(f"Analysis pipeline failed: {e}")
+            return {"type": "analysis", "text": f"Analysis of: {query}\n\nContext loaded: {len(context)} chars"}
     
     def _run_debug_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run debug/fix pipeline"""
+        """Run debug/fix pipeline - wired to builder.py"""
         step("🐛 Debugging...")
-        # Placeholder - would integrate with code_fixer
-        return {"type": "debug", "text": f"Debugging: {query}\n\nTemperature: {temperature}"}
+        # Delegate to builder.py's debug function
+        from .builder import debug
+        try:
+            result = debug(query, context)
+            return {"type": "debug", "text": result.get("explanation", str(result)), "changes": result.get("changes", [])}
+        except Exception as e:
+            logger.error(f"Debug pipeline failed: {e}")
+            return {"type": "debug", "text": f"Debugging: {query}\n\nTemperature: {temperature}"}
     
     def _run_build_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run build/create pipeline"""
+        """Run build/create pipeline - wired to builder.py"""
         step("🔨 Building...")
-        # Placeholder - would integrate with file_writer
-        return {"type": "build", "text": f"Creating: {query}\n\nTemperature: {temperature}"}
+        # Delegate to builder.py's build function via run_pipeline
+        from .builder import run_pipeline
+        try:
+            result, _ = run_pipeline(
+                task=query,
+                intent="build",
+                context=context,
+                history=self.conversation_history,
+                yield_steps=step
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Build pipeline failed: {e}")
+            return {"type": "build", "text": f"Creating: {query}\n\nTemperature: {temperature}"}
     
     def _run_chat_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run general chat pipeline"""
+        """Run general chat pipeline - wired to builder.py"""
         step("💬 Chatting...")
-        # Placeholder - would send to LLM
-        return {"type": "chat", "text": f"Response to: {query}\n\nTemperature: {temperature}"}
+        # Delegate to builder.py's chat function
+        from .builder import chat
+        try:
+            result_text = chat(query, self.conversation_history, context)
+            return {"type": "chat", "text": result_text}
+        except Exception as e:
+            logger.error(f"Chat pipeline failed: {e}")
+            return {"type": "chat", "text": f"Response to: {query}\n\nTemperature: {temperature}"}
 
 
 # Singleton instance
