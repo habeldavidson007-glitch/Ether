@@ -1489,6 +1489,8 @@ def run_pipeline(
     api_key: str = None,       # unused (Ollama local) — kept for app.py compat
     yield_steps=None,
     chat_mode: str = "mixed",  # unused — kept for app.py compat
+    prefetch_context: str = None,  # NEW Phase 11.2: Prefetched knowledge context
+    used_prefetch: bool = False,   # NEW Phase 11.2: Flag indicating prefetch usage
 ) -> Tuple[Dict, List[str]]:
     """
     Main pipeline. Signature unchanged from v1.9.
@@ -1500,6 +1502,8 @@ def run_pipeline(
         casual/chat    → _chat()            → qwen2.5-coder:1.5b-instruct-q4_k_m
 
     ONE model active per call. No parallel execution. No preloading.
+    
+    Phase 11.2: Added prefetch_context and used_prefetch parameters for general knowledge.
     """
     log: List[str] = []
 
@@ -1537,6 +1541,11 @@ def run_pipeline(
             # Pass search_engine if available (from Builder instance)
             # This enables knowledge base integration for conceptual questions
             from .unified_search import get_unified_search
+            # PHASE 11.2: Inject prefetch context if available
+            if prefetch_context:
+                context = f"[LIVE KNOWLEDGE - PREFETCHED]\n{prefetch_context}\n\n[PROJECT CONTEXT]\n{context}"
+                step("📡 Prefetch context injected into LLM prompt")
+            
             search_engine = None
             try:
                 # Try to get search engine from global state or create one
@@ -1548,7 +1557,7 @@ def run_pipeline(
                 pass  # Continue without KB if unavailable
             
             text = _explain(task, context, search_engine=search_engine)
-            return {"type": "chat", "text": text}, log
+            return {"type": "chat", "text": text, "used_prefetch": used_prefetch}, log
         except Exception as e:
             return {"type": "chat", "text": f"Explain error: {e}"}, log
 
@@ -1947,6 +1956,14 @@ class EtherBrain:
         self.search_engine = None
         self.memory = None
         
+        # Phase 11.2: Hippocampus for Prefetch Queue (General Knowledge)
+        self.hippocampus = None
+        try:
+            from ether.core.consciousness import Hippocampus
+            self.hippocampus = Hippocampus(max_size_mb=200)  # 200MB cap
+        except Exception as e:
+            logger.warning(f"Could not initialize Hippocampus: {e}")
+        
         # Safety Preview & Feedback Manager (NEW - Safe Code Application)
         self.safety_preview = get_safety_preview()
         self.feedback_manager = get_feedback_manager()
@@ -2069,7 +2086,11 @@ class EtherBrain:
         Fast Path: Greetings, status, quick help → instant response (<2s)
         Slow Path: Analysis, coding, debugging → full LLM pipeline
         
-        OFF-DOMAIN GUARD: Rejects non-Godot queries before hitting LLM.
+        PREFETCH-FIRST ARCHITECTURE (Phase 11.2):
+        1. Check prefetch queue for instant general knowledge
+        2. Off-domain guard allows prefetched topics
+        3. Inject prefetched context into LLM generation
+        
         Phase 11.1: Added dynamic temperature and auto follow-ups.
         
         Returns: (result_dict, log_list)
@@ -2081,8 +2102,18 @@ class EtherBrain:
             if yield_steps:
                 yield_steps(name)
         
-        # STEP 0: OFF-DOMAIN GUARD - Filter non-Godot queries
-        if not is_godot_related(query):
+        # STEP 0: PREFETCH QUEUE CHECK - Instant general knowledge (NEW in Phase 11.2)
+        prefetch_context = None
+        used_prefetch = False
+        if hasattr(self, 'hippocampus') and self.hippocampus:
+            prefetch_result = self.hippocampus.check_prefetch(query)
+            if prefetch_result:
+                step("⚡ Prefetch hit! Instant knowledge retrieved")
+                prefetch_context = prefetch_result.get('content', '')
+                used_prefetch = True
+        
+        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        if not is_godot_related(query) and not used_prefetch:
             step("🚫 Off-domain query detected")
             # Extract topic from query for polite refusal
             # Find first significant word that's not a common English word
