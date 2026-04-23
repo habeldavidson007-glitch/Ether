@@ -587,6 +587,258 @@ class GeneralFactsSource(KnowledgeSource):
         return ["health", "productivity", "learning", "technology", "lifestyle"]
 
 
+# ── REAL WEB FETCHING SOURCES (Phase 11.1) ─────────────────────────────────────
+# Live fetching from RSS feeds, APIs, and web sources
+
+class HackerNewsSource(KnowledgeSource):
+    """Hacker News top stories for tech trends."""
+    
+    def __init__(self):
+        super().__init__(
+            "hackernews",
+            "Latest tech news and discussions from Hacker News",
+            mode="general"
+        )
+    
+    def fetch(self) -> str:
+        """Fetch top stories from Hacker News API."""
+        try:
+            import requests
+            # Fetch top story IDs
+            response = requests.get(
+                "https://hacker-news.firebaseio.com/v0/topstories.json",
+                timeout=10
+            )
+            if response.status_code != 200:
+                return self._fallback_content()
+            
+            story_ids = response.json()[:10]  # Top 10 stories
+            
+            stories = []
+            for story_id in story_ids:
+                try:
+                    story_resp = requests.get(
+                        f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json",
+                        timeout=5
+                    )
+                    if story_resp.status_code == 200:
+                        story = story_resp.json()
+                        if story and story.get('title'):
+                            title = story['title']
+                            url = story.get('url', 'N/A')
+                            score = story.get('score', 0)
+                            stories.append(f"- {title} (Score: {score}) - {url}")
+                except:
+                    continue
+            
+            if stories:
+                return f"# Hacker News Top Stories\n\nFetched: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n" + "\n".join(stories)
+            return self._fallback_content()
+            
+        except Exception as e:
+            logger.warning(f"HackerNews fetch failed: {e}")
+            return self._fallback_content()
+    
+    def _fallback_content(self) -> str:
+        return """# Hacker News Top Stories
+
+Latest tech news and startup discussions. Check https://news.ycombinator.com for updates.
+
+## Recent Trending Topics
+- AI/ML developments
+- Startup funding news
+- Tech industry layoffs
+- New programming languages
+- Open source projects
+"""
+    
+    def get_topics(self) -> List[str]:
+        return ["tech news", "startups", "programming", "AI", "venture capital"]
+
+
+class ArXivSource(KnowledgeSource):
+    """ArXiv papers for cutting-edge research."""
+    
+    def __init__(self):
+        super().__init__(
+            "arxiv",
+            "Latest research papers from ArXiv (CS and AI categories)",
+            mode="general"
+        )
+    
+    def fetch(self) -> str:
+        """Fetch recent papers from ArXiv API."""
+        try:
+            import requests
+            # ArXiv API for CS and AI papers
+            base_url = "http://export.arxiv.org/api/query"
+            params = {
+                "search_query": "cat:cs.AI OR cat:cs.LG OR cat:cs.SE",
+                "start": 0,
+                "max_results": 10,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending"
+            }
+            
+            response = requests.get(base_url, params=params, timeout=15)
+            if response.status_code != 200:
+                return self._fallback_content()
+            
+            # Parse Atom XML response
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(response.content)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            
+            papers = []
+            for entry in root.findall("atom:entry", ns):
+                title_elem = entry.find("atom:title", ns)
+                summary_elem = entry.find("atom:summary", ns)
+                link_elem = entry.find("atom:id", ns)
+                
+                if title_elem is not None:
+                    title = title_elem.text.strip().replace("\n", " ")
+                    summary = summary_elem.text.strip().replace("\n", " ")[:200] if summary_elem is not None else "No summary"
+                    link = link_elem.text if link_elem is not None else "N/A"
+                    papers.append(f"- **{title}**\n  {summary}...\n  [{link}]")
+            
+            if papers:
+                return f"# ArXiv Recent Papers\n\nFetched: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n" + "\n\n".join(papers)
+            return self._fallback_content()
+            
+        except Exception as e:
+            logger.warning(f"ArXiv fetch failed: {e}")
+            return self._fallback_content()
+    
+    def _fallback_content(self) -> str:
+        return """# ArXiv Recent Papers
+
+Latest research in Computer Science and AI. Check https://arxiv.org for updates.
+
+## Hot Topics
+- Large Language Models
+- Reinforcement Learning
+- Computer Vision
+- Natural Language Processing
+- Software Engineering AI tools
+"""
+    
+    def get_topics(self) -> List[str]:
+        return ["research", "AI", "machine learning", "computer science", "papers"]
+
+
+class WikipediaSource(KnowledgeSource):
+    """Wikipedia featured articles for general knowledge."""
+    
+    def __init__(self):
+        super().__init__(
+            "wikipedia",
+            "Featured articles and trending topics from Wikipedia",
+            mode="general"
+        )
+    
+    def fetch(self) -> str:
+        """Fetch featured article from Wikipedia API."""
+        try:
+            import requests
+            # Get a random featured article
+            response = requests.get(
+                "https://en.wikipedia.org/api/rest_v1/page/random/featured",
+                timeout=10,
+                headers={"User-Agent": "Ether-Assistant/1.0"}
+            )
+            if response.status_code != 200:
+                return self._fallback_content()
+            
+            data = response.json()
+            if data and isinstance(data, list) and len(data) > 0:
+                article = data[0]
+                title = article.get('title', 'Unknown')
+                extract = article.get('extract', 'No summary available')[:800]
+                url = article.get('content_urls', {}).get('desktop', {}).get('page', 'N/A')
+                
+                return f"# Wikipedia Featured Article\n\nFetched: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n## {title}\n\n{extract}\n\n[Read more: {url}]"
+            
+            return self._fallback_content()
+            
+        except Exception as e:
+            logger.warning(f"Wikipedia fetch failed: {e}")
+            return self._fallback_content()
+    
+    def _fallback_content(self) -> str:
+        return """# Wikipedia Featured Articles
+
+Explore humanity's knowledge across all fields. Check https://wikipedia.org for updates.
+
+## Categories
+- Science and Technology
+- History and Geography
+- Arts and Culture
+- Biographies
+- Society and Social Sciences
+"""
+    
+    def get_topics(self) -> List[str]:
+        return ["encyclopedia", "science", "history", "culture", "general knowledge"]
+
+
+class RedditProgrammingSource(KnowledgeSource):
+    """Reddit r/programming for developer discussions."""
+    
+    def __init__(self):
+        super().__init__(
+            "reddit_programming",
+            "Top posts from r/programming subreddit",
+            mode="coding"
+        )
+    
+    def fetch(self) -> str:
+        """Fetch top posts from Reddit (using public JSON, no auth)."""
+        try:
+            import requests
+            response = requests.get(
+                "https://www.reddit.com/r/programming/hot.json?limit=10",
+                timeout=10,
+                headers={"User-Agent": "Ether-Assistant/1.0 by /u/ether_bot"}
+            )
+            if response.status_code != 200:
+                return self._fallback_content()
+            
+            data = response.json()
+            posts = []
+            
+            for child in data.get('data', {}).get('children', []):
+                post = child.get('data', {})
+                title = post.get('title', '')
+                url = post.get('url', '')
+                score = post.get('score', 0)
+                if title and 'ad' not in title.lower():
+                    posts.append(f"- {title} (⬆ {score}) - {url}")
+            
+            if posts:
+                return f"# r/Programming Hot Posts\n\nFetched: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n" + "\n".join(posts)
+            return self._fallback_content()
+            
+        except Exception as e:
+            logger.warning(f"Reddit fetch failed: {e}")
+            return self._fallback_content()
+    
+    def _fallback_content(self) -> str:
+        return """# r/Programming Discussions
+
+Developer community discussions and news. Check https://reddit.com/r/programming for updates.
+
+## Common Topics
+- Programming language debates
+- Tool and framework releases
+- Career advice
+- Code reviews
+- Industry trends
+"""
+    
+    def get_topics(self) -> List[str]:
+        return ["programming", "software development", "coding", "developer tools", "career"]
+
+
 class KnowledgeFetcher:
     """Main fetcher orchestrator."""
     
@@ -596,7 +848,7 @@ class KnowledgeFetcher:
         self.register_default_sources()
     
     def register_default_sources(self):
-        """Register all default knowledge sources."""
+        """Register all default knowledge sources including real web sources."""
         sources = [
             GodotSource(),
             CPPSource(),
@@ -605,6 +857,11 @@ class KnowledgeFetcher:
             JavaScriptSource(),
             DesignPatternsSource(),
             GeneralFactsSource(),
+            # Real-time web sources (Phase 11.1)
+            HackerNewsSource(),
+            ArXivSource(),
+            WikipediaSource(),
+            RedditProgrammingSource(),
         ]
         
         for source in sources:

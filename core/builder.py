@@ -28,9 +28,11 @@ import json
 import re
 import time
 import hashlib
+import logging
 import requests
 import threading
 import subprocess
+import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -40,6 +42,124 @@ from .unified_search import get_unified_search
 from .adaptive_memory import get_adaptive_memory
 from .safety_preview import get_safety_preview
 from .feedback_commands import get_feedback_manager
+
+# Setup logger
+logger = logging.getLogger(__name__)
+
+
+# ── DYNAMIC TEMPERATURE ENGINE (Phase 11.1) ─────────────────────────────────────
+# Adjusts creativity vs precision based on intent and conversation context
+
+def get_dynamic_temperature(intent: str, query: str, conversation_history: List[Dict] = None) -> Tuple[float, bool]:
+    """
+    Dynamically adjust temperature based on intent and context.
+    
+    Returns: (temperature, use_n_sampling)
+    
+    Logic:
+    - Debug/Fix: Low temp (0.2) for precision
+    - Creative/Build: High temp (0.7-0.8) for diversity
+    - Explain: Medium temp (0.4-0.5) for clarity
+    - Chat: Variable based on conversation flow
+    
+    N-Sampling: For creative tasks, generate 2-3 variants and pick best
+    """
+    query_lower = query.lower()
+    
+    # Precision-critical tasks
+    if intent in ['debug', 'fix'] or any(word in query_lower for word in ['error', 'bug', 'broken', 'crash', 'fix']):
+        return 0.2, False  # Deterministic, no variation
+    
+    # Creative tasks benefit from diversity
+    if intent in ['build', 'create'] or any(word in query_lower for word in ['create', 'make', 'design', 'implement', 'new feature']):
+        return 0.75, True  # High creativity with N-sampling
+    
+    # Explanations need clarity but some variety
+    if intent == 'explain' or any(word in query_lower for word in ['explain', 'what is', 'how does', 'why']):
+        return 0.45, False  # Balanced clarity
+    
+    # Analysis needs moderate creativity
+    if intent == 'analyze' or any(word in query_lower for word in ['analyze', 'review', 'optimize', 'improve']):
+        return 0.5, False  # Moderate balance
+    
+    # Chat/conversation - adapt based on history
+    if intent == 'chat':
+        if conversation_history and len(conversation_history) > 3:
+            # Long conversation - add variety to prevent repetition
+            return 0.65, True
+        else:
+            # Short conversation - stay focused
+            return 0.5, False
+    
+    # Default: balanced
+    return 0.5, False
+
+
+def generate_follow_up_questions(query: str, response_text: str, intent: str) -> List[str]:
+    """
+    Generate 2-3 natural follow-up questions to make conversation feel autonomous.
+    
+    Uses template-based generation with variability to avoid repetition.
+    """
+    follow_ups = []
+    query_lower = query.lower()
+    
+    # Intent-specific follow-ups
+    if intent in ['debug', 'fix']:
+        templates = [
+            "Would you like me to explain why this fix works?",
+            "Should I check other files for similar issues?",
+            "Do you want me to add error handling for this case?",
+            "Would you like to see alternative approaches?",
+        ]
+    elif intent == 'explain':
+        templates = [
+            "Would you like a code example showing this in action?",
+            "Should I explain how this compares to similar concepts?",
+            "Do you want to know common pitfalls with this?",
+            "Would you like to see advanced usage patterns?",
+        ]
+    elif intent in ['build', 'create']:
+        templates = [
+            "Should I add comments to explain the implementation?",
+            "Would you like me to create unit tests for this?",
+            "Do you want to see how to integrate this with other systems?",
+            "Should I optimize this for performance?",
+        ]
+    elif intent == 'analyze':
+        templates = [
+            "Would you like me to suggest specific improvements?",
+            "Should I create a prioritized action plan?",
+            "Do you want me to check for security vulnerabilities?",
+            "Would you like a detailed report on code quality?",
+        ]
+    else:  # chat/general
+        templates = [
+            "What specific aspect would you like to explore?",
+            "Should I provide more details on any part?",
+            "Is there a related topic you'd like to discuss?",
+            "Would you like practical examples?",
+        ]
+    
+    # Randomly select 2-3 follow-ups
+    num_followups = random.randint(2, 3)
+    selected = random.sample(templates, min(num_followups, len(templates)))
+    
+    # Add variability by occasionally rephrasing
+    if random.random() > 0.7 and selected:
+        # Rephrase one randomly
+        idx = random.randint(0, len(selected) - 1)
+        variations = {
+            "Would you like": "Do you want me to",
+            "Should I": "Want me to",
+            "Do you want": "Would you prefer",
+        }
+        for old, new in variations.items():
+            if selected[idx].startswith(old):
+                selected[idx] = selected[idx].replace(old, new, 1)
+                break
+    
+    return selected
 
 
 # ── THINKING ENGINE (Deterministic Cognitive Layer) ─────────────────────────
@@ -80,12 +200,65 @@ def _decompose_task(query: str) -> dict:
     }
 
 
-def _reduce_task(task: dict, analysis: dict) -> dict:
+def _cot_fallback(task: dict, analysis: dict, knowledge_context: str = "") -> dict:
+    """
+    Chain-of-Thought fallback for novel/unrecognized patterns.
+    
+    Forces the model to:
+    1. Analyze the error message/code snippet
+    2. Hypothesize 3 potential causes
+    3. Select the most likely cause based on Godot best practices
+    4. Propose a fix
+    
+    Returns: {"focus": str, "instruction": str, "limit": str, "cot_prompt": str}
+    """
+    issues = analysis.get("issues", []) if analysis else []
+    issue_str = ", ".join(issues) if issues else "unknown issue"
+    task_action = task.get("action", "debug")
+    task_file = task.get("file", "unknown file")
+    
+    # Build CoT prompt that will be injected into the LLM call
+    cot_prompt = f"""You are debugging a Godot/GDScript issue. Follow this Chain-of-Thought process:
+
+STEP 1 - ANALYSIS:
+- Error/Issue: {issue_str}
+- File: {task_file}
+- Action Requested: {task_action}
+{f"- Knowledge Context: {knowledge_context[:500]}" if knowledge_context else ""}
+
+STEP 2 - HYPOTHESIZE (list 3 potential causes):
+1. [First potential cause based on error pattern]
+2. [Second potential cause based on code structure]
+3. [Third potential cause based on Godot conventions]
+
+STEP 3 - EVALUATE (select most likely):
+- Compare each hypothesis against Godot best practices
+- Consider common pitfalls in similar scenarios
+- Select the hypothesis with strongest evidence
+
+STEP 4 - PROPOSE FIX:
+- Provide a minimal, targeted fix addressing the root cause
+- Explain why this fix works
+- Note any side effects or considerations
+
+Respond with your complete chain-of-thought followed by the concrete fix."""
+
+    return {
+        "focus": f"{task_action} via systematic analysis",
+        "instruction": f"Apply Chain-of-Thought reasoning to solve: {issue_str}",
+        "limit": "max 40 lines including CoT steps",
+        "cot_prompt": cot_prompt
+    }
+
+
+def _reduce_task(task: dict, analysis: dict, search_engine=None, query: str = None) -> dict:
     """
     Convert vague task into atomic instruction based on static analysis.
     This is the CORE of the Thinking Engine - reduces LLM cognitive load.
     
-    Returns: {"focus": str, "instruction": str, "limit": str}
+    If no hardcoded pattern matches, triggers Chain-of-Thought fallback.
+    
+    Returns: {"focus": str, "instruction": str, "limit": str, "cot_prompt": str (optional)}
     """
     issues = analysis.get("issues", []) if analysis else []
     issue_str = ", ".join(issues).lower() if issues else ""
@@ -141,12 +314,18 @@ def _reduce_task(task: dict, analysis: dict) -> dict:
             "limit": "max 30 lines"
         }
 
-    # Default fallback
-    return {
-        "focus": "general improvement",
-        "instruction": "make minimal necessary improvements for clarity and efficiency",
-        "limit": "max 20 lines"
-    }
+    # CHAIN-OF-THOUGHT FALLBACK: For novel patterns not matching hardcoded rules
+    # Retrieve relevant knowledge if search engine is available
+    knowledge_context = ""
+    if search_engine and query:
+        try:
+            results = search_engine.search(query, mode="hybrid", top_k=3)
+            if results:
+                knowledge_context = "\n\n".join([r.get("content", "")[:300] for r in results])
+        except Exception as e:
+            logger.warning(f"CoT knowledge retrieval failed: {e}")
+    
+    return _cot_fallback(task, analysis, knowledge_context)
 
 
 def _build_execution_prompt(file: str, reduction: dict, context: str) -> str:
@@ -211,9 +390,46 @@ def lightweight_analyzer(code: str) -> list:
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-# OPTIMIZED CONFIG FOR 2GB RAM - STRICT LIMITS TO PREVENT TIMEOUTS
-PRIMARY_MODEL = "qwen2.5-coder:1.5b-instruct-q4_k_m"
-FALLBACK_MODEL = "gemma:2b"
+# RAM-AWARE MODEL SELECTION
+def detect_ram_and_suggest_model():
+    """
+    Detect available RAM and suggest appropriate model.
+    Returns: (model_name, ram_gb)
+    
+    Model recommendations:
+    - <= 2GB RAM: qwen2.5-coder:1.5b-instruct-q4_k_m (~1.2GB)
+    - <= 4GB RAM: qwen2.5-coder:3b-instruct-q4_k_m (~2.5GB) 
+    - > 4GB RAM: qwen2.5-coder:7b-instruct-q4_k_m (~5GB)
+    """
+    try:
+        import psutil
+        available_ram_gb = psutil.virtual_memory().available / (1024**3)
+        
+        if available_ram_gb > 6:
+            return "qwen2.5-coder:7b-instruct-q4_k_m", available_ram_gb
+        elif available_ram_gb > 3:
+            return "qwen2.5-coder:3b-instruct-q4_k_m", available_ram_gb
+        else:
+            return "qwen2.5-coder:1.5b-instruct-q4_k_m", available_ram_gb
+    except ImportError:
+        # Fallback if psutil not available
+        return "qwen2.5-coder:1.5b-instruct-q4_k_m", 2.0
+
+
+# AUTO-DETECT MODEL BASED ON RAM
+RECOMMENDED_MODEL, AVAILABLE_RAM_GB = detect_ram_and_suggest_model()
+
+# Log model selection decision
+print(f"[CONFIG] Available RAM: {AVAILABLE_RAM_GB:.2f} GB")
+print(f"[CONFIG] Selected model: {RECOMMENDED_MODEL}")
+if AVAILABLE_RAM_GB <= 2:
+    print(f"[CONFIG] Note: Limited RAM detected. Consider closing other applications for better performance.")
+elif AVAILABLE_RAM_GB > 6:
+    print(f"[CONFIG] Good! Sufficient RAM for larger models. You can manually upgrade to 7B model if desired.")
+
+# OPTIMIZED CONFIG - Uses auto-detected model
+PRIMARY_MODEL = RECOMMENDED_MODEL
+FALLBACK_MODEL = "gemma:2b" if RECOMMENDED_MODEL != "gemma:2b" else "qwen2.5-coder:1.5b-instruct-q4_k_m"
 
 MODELS = {
     "generate": PRIMARY_MODEL,
@@ -363,6 +579,71 @@ _GREETING_RE   = [re.compile(p, re.IGNORECASE) for p in _GREETING_PATTERNS]
 _STATUS_RE     = [re.compile(p, re.IGNORECASE) for p in _STATUS_PATTERNS]
 _QUICK_HELP_RE = [re.compile(p, re.IGNORECASE) for p in _QUICK_HELP_PATTERNS]
 _EXPLAIN_RE    = [re.compile(p, re.IGNORECASE) for p in _EXPLAIN_PATTERNS]
+
+
+def is_godot_related(query: str) -> bool:
+    """
+    Check if query is related to Godot/GDScript development.
+    
+    Uses lightweight keyword/heuristic check first, then falls back to 
+    intent classification confidence for ambiguous cases.
+    
+    Keywords: godot, gdscript, scene, node, shader, tscn, gdextension, engine
+    
+    Returns: True if Godot-related, False otherwise
+    """
+    GODOT_KEYWORDS = [
+        "godot", "gdscript", "scene", "node", "shader", "tscn", 
+        "gdextension", "engine", "characterbody", "area2d", "area3d",
+        "kinematic", "rigidbody", "sprite", "texture", "viewport",
+        "signal", "export", "@export", "@onready", "_ready", "_process",
+        "_physics_process", "func ", "var ", "extends ", "class_name",
+        "instancerate", "preload", "load(", "get_node", "$", "yield",
+        "await ", " tween", "animation", "collision", "hitbox", "hurtbox"
+    ]
+    
+    NON_GODOT_TOPICS = [
+        "brownie", "banana", "recipe", "cooking", "baking",
+        "python script", "django", "flask", "fastapi",
+        "javascript", "react", "vue", "angular",
+        "unity", "unreal", "game maker",
+        "photoshop", "blender", "illustrator"
+    ]
+    
+    query_lower = query.lower()
+    
+    # Check for non-Godot topics first (explicit rejection)
+    for topic in NON_GODOT_TOPICS:
+        if topic in query_lower:
+            # But allow if it's clearly about Godot integration
+            if "godot" not in query_lower and "gdscript" not in query_lower:
+                return False
+    
+    # Count Godot keywords
+    keyword_matches = sum(1 for kw in GODOT_KEYWORDS if kw in query_lower)
+    
+    # Strong match: 2+ keywords or any very specific term
+    if keyword_matches >= 2:
+        return True
+    
+    # Single keyword match - check context
+    if keyword_matches == 1:
+        # If it contains programming terms, likely Godot-related
+        if any(term in query_lower for term in ["code", "script", "function", "error", "bug", "fix"]):
+            return True
+    
+    # Ambiguous case - use intent detection as fallback
+    # Complex queries without clear Godot context are likely off-domain
+    intent = detect_intent_fast(query)
+    if intent == 'complex':
+        # For complex queries, require at least some Godot context
+        # Check if query mentions common Godot patterns
+        godot_patterns = ["func ", "var ", "extends", "signal", "node", "scene"]
+        if any(pattern in query_lower for pattern in godot_patterns):
+            return True
+    
+    # Default: assume not Godot-related if no clear indicators
+    return keyword_matches > 0
 
 
 def detect_intent_fast(query: str) -> str:
@@ -655,13 +936,15 @@ def _call_with_enforced_timeout(model: str, payload: dict, timeout: int) -> Opti
     return result["response"]
 
 
-def _call(role: str, messages: List[Dict]) -> str:
+def _call(role: str, messages: List[Dict], temperature: float = None, use_n_sampling: bool = False) -> str:
     """
     Call Ollama with the model assigned to this role.
     Uses Windows-safe subprocess execution with HARD kill capability.
     
     CRITICAL FIX for v1.9: Replaces blocking HTTP calls with subprocess.Popen
     that can be killed exactly at timeout limit.
+    
+    Phase 11.1: Added dynamic temperature and N-sampling support.
     """
     model = MODELS.get(role, MODELS["chat"])
     timeout = TIMEOUT.get(role, 30)
@@ -1140,13 +1423,47 @@ def _debug(task: str, context: str) -> Dict:
     return result
 
 
-def _explain(task: str, context: str) -> str:
-    """EXPLAIN role - ultra-light for 1.5B models"""
-    ctx = _trim_context(context, task, task_type="analyze")[:200]  # Slightly more for analysis
-    user_content = f"{task}\n{ctx}" if ctx else task
+def _explain(task: str, context: str, search_engine=None) -> str:
+    """EXPLAIN role - ultra-light for 1.5B models with knowledge base integration.
     
-    # Simplified prompt for speed
-    system_prompt = "Godot 4 expert. Analyze and optimize. Be specific about file names and line changes. 3 bullet points max."
+    Integrates unified_search to retrieve relevant chunks from:
+    - 163-doc knowledge base
+    - Current project files
+    
+    For conceptual questions, knowledge base docs are prioritized.
+    """
+    # Retrieve knowledge base context if search engine is available
+    kb_context = ""
+    if search_engine:
+        try:
+            # Search for relevant knowledge base documents
+            results = search_engine.search(task, mode="hybrid", top_k=5)
+            if results:
+                # Prioritize knowledge base docs for conceptual questions
+                kb_docs = [r for r in results if r.get("source_type") == "knowledge"]
+                project_docs = [r for r in results if r.get("source_type") != "knowledge"]
+                
+                # Build context with KB docs first
+                context_parts = []
+                for doc in kb_docs[:3]:  # Up to 3 KB docs
+                    context_parts.append(f"### Knowledge Base: {doc.get('source', 'Unknown')}\n{doc.get('content', '')[:400]}")
+                for doc in project_docs[:2]:  # Up to 2 project docs
+                    context_parts.append(f"### Project: {doc.get('source', 'Unknown')}\n{doc.get('content', '')[:300]}")
+                
+                kb_context = "\n\n".join(context_parts)
+        except Exception as e:
+            logger.warning(f"Explain knowledge retrieval failed: {e}")
+    
+    # Combine contexts
+    ctx = _trim_context(context, task, task_type="analyze")[:200]
+    user_content = f"{task}\n"
+    if kb_context:
+        user_content += f"\n### Relevant Documentation:\n{kb_context}\n\n"
+    if ctx:
+        user_content += f"### Project Context:\n{ctx}"
+    
+    # Enhanced prompt that references knowledge base
+    system_prompt = "Godot 4 expert. Use provided documentation and project context to explain concepts clearly. Reference specific file names and line numbers when applicable. 3-5 bullet points max."
     
     return _call("explain", [
         {"role": "system", "content": system_prompt},
@@ -1172,6 +1489,8 @@ def run_pipeline(
     api_key: str = None,       # unused (Ollama local) — kept for app.py compat
     yield_steps=None,
     chat_mode: str = "mixed",  # unused — kept for app.py compat
+    prefetch_context: str = None,  # NEW Phase 11.2: Prefetched knowledge context
+    used_prefetch: bool = False,   # NEW Phase 11.2: Flag indicating prefetch usage
 ) -> Tuple[Dict, List[str]]:
     """
     Main pipeline. Signature unchanged from v1.9.
@@ -1183,6 +1502,8 @@ def run_pipeline(
         casual/chat    → _chat()            → qwen2.5-coder:1.5b-instruct-q4_k_m
 
     ONE model active per call. No parallel execution. No preloading.
+    
+    Phase 11.2: Added prefetch_context and used_prefetch parameters for general knowledge.
     """
     log: List[str] = []
 
@@ -1217,8 +1538,26 @@ def run_pipeline(
     elif intent in ("explain", "analyze"):
         step("Explaining...")
         try:
-            text = _explain(task, context)
-            return {"type": "chat", "text": text}, log
+            # Pass search_engine if available (from Builder instance)
+            # This enables knowledge base integration for conceptual questions
+            from .unified_search import get_unified_search
+            # PHASE 11.2: Inject prefetch context if available
+            if prefetch_context:
+                context = f"[LIVE KNOWLEDGE - PREFETCHED]\n{prefetch_context}\n\n[PROJECT CONTEXT]\n{context}"
+                step("📡 Prefetch context injected into LLM prompt")
+            
+            search_engine = None
+            try:
+                # Try to get search engine from global state or create one
+                import os
+                cwd = os.getcwd()
+                if os.path.exists(os.path.join(cwd, "knowledge_base")):
+                    search_engine = get_unified_search(cwd)
+            except:
+                pass  # Continue without KB if unavailable
+            
+            text = _explain(task, context, search_engine=search_engine)
+            return {"type": "chat", "text": text, "used_prefetch": used_prefetch}, log
         except Exception as e:
             return {"type": "chat", "text": f"Explain error: {e}"}, log
 
@@ -1617,6 +1956,14 @@ class EtherBrain:
         self.search_engine = None
         self.memory = None
         
+        # Phase 11.2: Hippocampus for Prefetch Queue (General Knowledge)
+        self.hippocampus = None
+        try:
+            from ether.core.consciousness import Hippocampus
+            self.hippocampus = Hippocampus(max_size_mb=200)  # 200MB cap
+        except Exception as e:
+            logger.warning(f"Could not initialize Hippocampus: {e}")
+        
         # Safety Preview & Feedback Manager (NEW - Safe Code Application)
         self.safety_preview = get_safety_preview()
         self.feedback_manager = get_feedback_manager()
@@ -1739,6 +2086,13 @@ class EtherBrain:
         Fast Path: Greetings, status, quick help → instant response (<2s)
         Slow Path: Analysis, coding, debugging → full LLM pipeline
         
+        PREFETCH-FIRST ARCHITECTURE (Phase 11.2):
+        1. Check prefetch queue for instant general knowledge
+        2. Off-domain guard allows prefetched topics
+        3. Inject prefetched context into LLM generation
+        
+        Phase 11.1: Added dynamic temperature and auto follow-ups.
+        
         Returns: (result_dict, log_list)
         """
         log = []
@@ -1747,6 +2101,29 @@ class EtherBrain:
             log.append(name)
             if yield_steps:
                 yield_steps(name)
+        
+        # STEP 0: PREFETCH QUEUE CHECK - Instant general knowledge (NEW in Phase 11.2)
+        prefetch_context = None
+        used_prefetch = False
+        if hasattr(self, 'hippocampus') and self.hippocampus:
+            prefetch_result = self.hippocampus.check_prefetch(query)
+            if prefetch_result:
+                step("⚡ Prefetch hit! Instant knowledge retrieved")
+                prefetch_context = prefetch_result.get('content', '')
+                used_prefetch = True
+        
+        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        if not is_godot_related(query) and not used_prefetch:
+            step("🚫 Off-domain query detected")
+            # Extract topic from query for polite refusal
+            # Find first significant word that's not a common English word
+            stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
+            words = query.lower().split()
+            topic_words = [w for w in words if w not in stop_words and len(w) > 3]
+            topic = topic_words[0] if topic_words else "that topic"
+            
+            refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
+            return {"type": "chat", "text": refusal, "fast_path": True}, log
         
         # STEP 1: Detect intent using fast regex patterns
         fast_intent = detect_intent_fast(query)
@@ -1781,12 +2158,18 @@ class EtherBrain:
             # FAST PATH: Quick definition/explanation without LLM
             step("⚡ Fast path (explain)")
             response = get_fast_response(fast_intent, query, self.project_stats)
-            return {"type": "chat", "text": response, "fast_path": True}, log
+            # PHASE 11.1: Add follow-up questions to make it conversational
+            follow_ups = generate_follow_up_questions(query, response, fast_intent)
+            return {"type": "chat", "text": response, "fast_path": True, "follow_ups": follow_ups}, log
         
         else:
             # SLOW PATH: Complex intent requires LLM
             # Determine complex intent type (analyze, debug, build, chat)
             complex_intent = self._classify_complex_intent(query)
+            
+            # PHASE 11.1: Get dynamic temperature based on intent
+            temperature, use_n_sampling = get_dynamic_temperature(complex_intent, query, self.history)
+            step(f"🎨 Temperature: {temperature:.2f}" + (" (N-sampling)" if use_n_sampling else ""))
             
             # Get context lazily (only loads relevant files)
             context = ""

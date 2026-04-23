@@ -18,9 +18,10 @@ import streamlit as st
 from streamlit import iframe
 from pathlib import Path
 from typing import Dict, List, Any
+from datetime import datetime
 
-# Import EtherBrain - the new optimized engine
-from core.builder import EtherBrain
+# Import EtherBrain - the unified cortex engine
+from core.cortex import EtherBrain
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -554,7 +555,7 @@ def _tab_chat():
                 )
 
             try:
-                from core.builder import run_pipeline
+                from core.cortex import run_pipeline
                 context = ""
                 if brain.project_loader:
                     context = brain.project_loader.build_lightweight_context(task)
@@ -730,6 +731,191 @@ def _tab_map():
                     st.markdown(f"`{path}` — {meta.get('size', 0)} bytes")
 
 
+# ── Apply Tab (Diff Preview) ────────────────────────────────────────────────────
+
+def _tab_apply():
+    """Display pending changes with diff preview before applying."""
+    brain = _get_brain()
+    
+    pending = _pending()
+    raw_changes = st.session_state.get("pending_raw", [])
+    
+    if not pending:
+        st.info("No pending changes. Changes will appear here after code generation.")
+        return
+    
+    st.markdown(f'## ⚠️ {len(pending)} Pending Change(s)')
+    st.caption("Review diffs carefully before confirming. All changes are safety-checked.")
+    
+    for i, p in enumerate(pending):
+        is_new = p["is_new"]
+        badge = "badge-warn" if is_new else "badge-info"
+        label = "NEW FILE" if is_new else "MODIFY"
+        
+        st.markdown(f'<span class="badge {badge}">{label}</span> `{p["file"]}` — {p["line_count"]} lines', 
+                   unsafe_allow_html=True)
+        
+        with st.expander(f"📋 Diff Preview — {p['file']}", expanded=(i == 0)):
+            lines = p["diff"].splitlines()
+            rendered = []
+            for line in lines[:100]:  # Limit display
+                if line.startswith("+") and not line.startswith("+++"):
+                    rendered.append(f'<span class="diff-add">{line}</span>')
+                elif line.startswith("-") and not line.startswith("---"):
+                    rendered.append(f'<span class="diff-rem">{line}</span>')
+                else:
+                    rendered.append(f'<span class="diff-ctx">{line}</span>')
+            st.markdown("<pre>" + "\n".join(rendered) + "</pre>", unsafe_allow_html=True)
+            
+            if len(lines) > 100:
+                st.caption(f"... and {len(lines) - 100} more lines")
+    
+    st.divider()
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("✓ Confirm & Write Changes", type="primary", use_container_width=True):
+            if not brain.project_loader:
+                st.error("Load a project first.")
+                return
+            ok, msg, updated = _apply_changes(raw_changes, brain.project_loader)
+            if ok:
+                brain.project_stats = brain.project_loader.get_stats()
+                st.session_state["pending_changes"] = []
+                st.session_state["pending_raw"] = []
+                brain.add_to_history("assistant", f"Applied: {msg}")
+                st.success(f"✓ {msg}")
+                st.rerun()
+            else:
+                st.error(msg)
+    with col2:
+        if st.button("✗ Discard Changes", use_container_width=True):
+            st.session_state["pending_changes"] = []
+            st.session_state["pending_raw"] = []
+            st.rerun()
+
+
+# ── Files Tab (Project Explorer) ────────────────────────────────────────────────
+
+def _tab_files():
+    """Display project file explorer using pathlib."""
+    brain = _get_brain()
+    
+    if not brain.project_loader:
+        st.info("Upload a project ZIP (＋ button in Chat) to browse files.")
+        return
+    
+    st.markdown("## 📁 Project Explorer")
+    
+    # Get workspace path
+    workspace_path = Path(brain.project_root) if hasattr(brain, 'project_root') else Path.cwd()
+    
+    # Use pathlib to list files
+    try:
+        all_files = list(workspace_path.rglob("*"))
+        files = [f for f in all_files if f.is_file()]
+        dirs = [f for f in all_files if f.is_dir()]
+        
+        c1, c2 = st.columns(2)
+        c1.metric("Total Files", len(files))
+        c2.metric("Directories", len(dirs))
+        
+        st.divider()
+        
+        # Group by extension
+        ext_groups = {}
+        for f in files:
+            ext = f.suffix.lower()
+            if ext not in ext_groups:
+                ext_groups[ext] = []
+            try:
+                rel_path = str(f.relative_to(workspace_path))
+                ext_groups[ext].append(rel_path)
+            except ValueError:
+                ext_groups[ext].append(str(f))
+        
+        # Show GDScript files first
+        priority_exts = [".gd", ".tscn", ".tres", ".cfg"]
+        other_exts = sorted([e for e in ext_groups.keys() if e not in priority_exts])
+        
+        for ext in priority_exts + other_exts:
+            if ext not in ext_groups:
+                continue
+            
+            file_list = sorted(ext_groups[ext])
+            icon = {"gd": "📜", "tscn": "🎬", "tres": "📦", "cfg": "⚙️"}.get(ext.strip("."), "📄")
+            
+            with st.expander(f"{icon} {ext.upper()} ({len(file_list)})"):
+                for fp in file_list[:50]:  # Limit display
+                    try:
+                        size = workspace_path.joinpath(fp).stat().st_size
+                        st.caption(f"`{fp}` — {size:,} bytes")
+                    except Exception:
+                        st.caption(f"`{fp}`")
+                
+                if len(file_list) > 50:
+                    st.caption(f"... and {len(file_list) - 50} more files")
+                    
+    except Exception as e:
+        st.error(f"Error browsing files: {e}")
+
+
+# ── Memory Tab (Context Inspection) ─────────────────────────────────────────────
+
+def _tab_memory():
+    """Display Hippocampus memory buffers (sanitized)."""
+    from ether.core.cortex import get_consciousness
+    
+    st.markdown("## 🧠 Memory Inspection")
+    
+    try:
+        consciousness = get_consciousness()
+        status = consciousness.get_status()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Working Memory", status.get("working_memory_size", 0))
+        c2.metric("Long-term Memory", status.get("long_term_memory_size", 0))
+        c3.metric("Conversation Turns", status.get("conversation_turns", 0))
+        
+        st.divider()
+        
+        # Working Memory
+        st.markdown("### Short-Term (Working Memory)")
+        if consciousness.hippocampus.working_memory:
+            for i, unit in enumerate(consciousness.hippocampus.working_memory[-10:]):  # Last 10
+                with st.expander(f"Entry {i+1} (relevance: {unit.relevance_score:.2f}, accesses: {unit.access_count})"):
+                    st.caption(f"Timestamp: {datetime.fromtimestamp(unit.timestamp).strftime('%H:%M:%S')}")
+                    content_preview = unit.content[:500]
+                    if len(unit.content) > 500:
+                        content_preview += "..."
+                    st.text(content_preview)
+                    if unit.metadata:
+                        st.json(unit.metadata)
+        else:
+            st.caption("No working memory entries yet.")
+        
+        st.divider()
+        
+        # Long-term Memory
+        st.markdown("### Long-Term Memory")
+        if consciousness.hippocampus.long_term_memory:
+            for i, unit in enumerate(consciousness.hippocampus.long_term_memory[-5:]):  # Last 5
+                with st.expander(f"Stored Entry {i+1} (relevance: {unit.relevance_score:.2f})"):
+                    content_preview = unit.content[:400]
+                    if len(unit.content) > 400:
+                        content_preview += "..."
+                    st.text(content_preview)
+        else:
+            st.caption("No long-term memory entries yet.")
+            
+        st.divider()
+        st.caption("💡 Memory automatically consolidates from working to long-term storage based on relevance.")
+        
+    except Exception as e:
+        st.error(f"Error accessing memory: {e}")
+        st.caption("Note: Memory inspection requires consciousness engine initialization.")
+
+
 # ── Settings Tab ───────────────────────────────────────────────────────────────
 
 def _tab_settings():
@@ -794,10 +980,13 @@ def main():
     )
     st.markdown("")
 
-    tabs = st.tabs(["CHAT", "BRAIN MAP", "SETTINGS"])
+    tabs = st.tabs(["CHAT", "APPLY", "FILES", "MEMORY", "BRAIN MAP", "SETTINGS"])
     with tabs[0]: _tab_chat()
-    with tabs[1]: _tab_map()
-    with tabs[2]: _tab_settings()
+    with tabs[1]: _tab_apply()
+    with tabs[2]: _tab_files()
+    with tabs[3]: _tab_memory()
+    with tabs[4]: _tab_map()
+    with tabs[5]: _tab_settings()
 
 
 if __name__ == "__main__":

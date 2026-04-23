@@ -1,19 +1,24 @@
 """
-Ether Librarian - Intelligent Context Retrieval from Knowledge Base
-====================================================================
+Ether Librarian - Intelligent Context Retrieval (General Knowledge Enhanced)
+============================================================================
 Purpose: Retrieve relevant knowledge based on user queries with mode-aware filtering.
+         Now supports general knowledge beyond Godot, integrated with MCP prefetch system.
 
 Features:
 - Keyword-based inverted index (420+ topics indexed)
 - Mode-aware filtering (coding/general/mixed)
+- General knowledge support (Wikipedia, RSS feeds, tech news)
 - Lazy loading for memory efficiency
 - Automatic chunking and scoring
 - Thread-safe operations for concurrent access
+- Integration with Hippocampus prefetch queue
 
 Improvements in v1.9.8:
 - Thread-safe indexing and search operations
 - Memory-efficient lazy loading
 - Scalability enhancements for large knowledge bases
+- General knowledge fetching from web sources
+- Zstd compression integration via Hippocampus
 
 Usage:
     librarian = get_librarian()
@@ -23,9 +28,12 @@ Usage:
 import os
 import re
 import threading
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 
 class InvertedIndex:
@@ -147,7 +155,7 @@ class Librarian:
             self.index = InvertedIndex()
             self.file_cache.clear()
         
-        # Map file modes based on filename patterns
+        # Map file modes based on filename patterns (EXPANDED FOR GENERAL KNOWLEDGE)
         mode_mapping = {
             "godot": "coding",
             "cpp": "coding",
@@ -156,9 +164,23 @@ class Librarian:
             "javascript": "coding",
             "design_patterns": "coding",
             "general_facts": "general",
+            # General knowledge topics
+            "artificial_intelligence": "general",
+            "machine_learning": "general",
+            "programming": "general",
+            "software_engineering": "general",
+            "data_structures": "coding",
+            "algorithms": "coding",
+            "python": "coding",
+            "rust": "coding",
+            "web_development": "coding",
+            "database": "coding",
+            "linux": "general",
+            "science": "general",
+            "technology": "general",
         }
         
-        # Topic extraction from filename
+        # Topic extraction from filename (EXPANDED)
         topic_mapping = {
             "godot_engine": ["godot", "game engine", "gdscript", "nodes"],
             "cpp_basics": ["c++", "memory", "pointers", "oop"],
@@ -167,6 +189,20 @@ class Librarian:
             "javascript_basics": ["javascript", "web", "async", "dom"],
             "design_patterns": ["patterns", "architecture", "singleton", "factory"],
             "general_facts": ["general", "facts", "trivia", "lifestyle"],
+            # General knowledge topics
+            "artificial_intelligence": ["ai", "artificial intelligence", "neural networks", "deep learning"],
+            "machine_learning": ["machine learning", "ml", "training", "models"],
+            "programming": ["programming", "coding", "software", "development"],
+            "software_engineering": ["software engineering", "best practices", "testing", "debugging"],
+            "data_structures": ["data structures", "arrays", "trees", "graphs", "hash tables"],
+            "algorithms": ["algorithms", "sorting", "searching", "complexity", "optimization"],
+            "python": ["python", "scripting", "automation", "data science"],
+            "rust": ["rust", "systems programming", "memory safety", "performance"],
+            "web_development": ["web", "html", "css", "frontend", "backend"],
+            "database": ["database", "sql", "nosql", "queries", "indexing"],
+            "linux": ["linux", "unix", "shell", "terminal", "sysadmin"],
+            "science": ["science", "physics", "mathematics", "research"],
+            "technology": ["technology", "tech news", "innovation", "gadgets"],
         }
         
         indexed_count = 0
