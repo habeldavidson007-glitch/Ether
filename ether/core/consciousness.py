@@ -270,6 +270,39 @@ class Hippocampus:
         except Exception as e:
             logger.error(f"Failed to retrieve prefetch for '{topic}': {e}")
             return None
+
+    def check_prefetch(self, query: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if query matches any prefetched topics.
+        
+        Returns dict with 'content' and 'topic' keys if match found, None otherwise.
+        This is the main interface used by builder.py for prefetch-first architecture.
+        """
+        if not self.prefetch_queue:
+            return None
+        
+        query_lower = query.lower()
+        query_words = [w for w in query_lower.split() if len(w) > 3]
+        
+        # Check each significant word in query against prefetch topics
+        for word in query_words:
+            # Exact match
+            if word in self.prefetch_queue:
+                content = self.get_from_prefetch(word)
+                if content:
+                    logger.debug(f"Prefetch hit for topic '{word}'")
+                    return {"topic": word, "content": content, "match_type": "exact"}
+            
+            # Partial match (topic contains query word or vice versa)
+            for topic in self.prefetch_queue.keys():
+                if word in topic or topic in word:
+                    content = self.get_from_prefetch(topic)
+                    if content:
+                        logger.debug(f"Prefetch partial hit: '{word}' matched '{topic}'")
+                        return {"topic": topic, "content": content, "match_type": "partial"}
+        
+        # No match found
+        return None
     
     def clear_prefetch(self):
         """Clear prefetch queue"""
