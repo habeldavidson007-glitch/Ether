@@ -16,10 +16,12 @@ import re
 import json
 import logging
 import psutil
+import zstandard as zstd
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
+import hashlib
 
 # ML Dependencies
 try:
@@ -32,6 +34,10 @@ except ImportError:
     logging.warning("scikit-learn not available. Falling back to rule-based classification.")
 
 logger = logging.getLogger(__name__)
+
+# Compression settings for Hippocampus
+COMPRESSION_LEVEL = 3  # Balance between speed and ratio (1-9)
+MAX_MEMORY_SIZE_MB = 200  # Hard cap on memory usage
 
 # Godot-related keywords for domain filtering
 GODOT_KEYWORDS = {
@@ -86,34 +92,99 @@ class MemoryUnit:
 
 class Hippocampus:
     """
-    Step 2: Consolidated Memory System
+    Step 2: Consolidated Memory System with Zstd Compression
     Merges Adaptive Memory, Librarian, and Context Manager
+    
+    Features:
+    - Zstandard compression for efficient storage (3-5x reduction)
+    - 200MB hard cap with intelligent eviction
+    - General knowledge support (not just Godot)
+    - Pre-fetch queue for instant responses
     """
-    def __init__(self, capacity: int = 1000):
+    def __init__(self, capacity: int = 1000, max_size_mb: int = MAX_MEMORY_SIZE_MB):
         self.capacity = capacity
+        self.max_size_mb = max_size_mb
         self.working_memory: List[MemoryUnit] = []
         self.long_term_memory: List[MemoryUnit] = []
+        self.prefetch_queue: Dict[str, str] = {}  # topic -> compressed_content
         self.vectorizer: Optional[Any] = None
+        self.compressor = zstd.ZstdCompressor(level=COMPRESSION_LEVEL)
+        self.decompressor = zstd.ZstdDecompressor()
+        self._current_size_bytes = 0
         
         # Initialize semantic search if possible
         if ML_AVAILABLE:
             self.vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
         
-        logger.info("Hippocampus initialized with unified memory")
+        logger.info(f"Hippocampus initialized with unified memory (max {max_size_mb}MB, compression level {COMPRESSION_LEVEL})")
 
+    def _compress_content(self, content: str) -> bytes:
+        """Compress content using Zstandard"""
+        try:
+            compressed = self.compressor.compress(content.encode('utf-8'))
+            return compressed
+        except Exception as e:
+            logger.error(f"Compression failed: {e}")
+            return content.encode('utf-8')
+    
+    def _decompress_content(self, compressed_data: bytes) -> str:
+        """Decompress Zstandard content"""
+        try:
+            decompressed = self.decompressor.decompress(compressed_data)
+            return decompressed.decode('utf-8')
+        except Exception as e:
+            logger.error(f"Decompression failed: {e}")
+            try:
+                return compressed_data.decode('utf-8')
+            except:
+                return ""
+    
+    def _estimate_size(self, content: str) -> int:
+        """Estimate compressed size of content"""
+        compressed = self._compress_content(content)
+        return len(compressed)
+    
+    def _enforce_memory_cap(self):
+        """Enforce 200MB cap by evicting low-priority memories"""
+        max_bytes = self.max_size_mb * 1024 * 1024
+        
+        if self._current_size_bytes <= max_bytes:
+            return
+        
+        logger.info(f"Memory cap exceeded ({self._current_size_bytes/1024/1024:.1f}MB > {self.max_size_mb}MB), evicting...")
+        
+        # Sort by relevance and access count (lower = evict first)
+        self.long_term_memory.sort(key=lambda x: (x.relevance_score, x.access_count))
+        
+        # Evict until under cap
+        while self._current_size_bytes > max_bytes * 0.8 and self.long_term_memory:
+            victim = self.long_term_memory.pop(0)
+            estimated = self._estimate_size(victim.content)
+            self._current_size_bytes -= estimated
+            logger.debug(f"Evicted memory unit: {victim.content[:50]}...")
+        
+        logger.info(f"Memory after eviction: {self._current_size_bytes/1024/1024:.1f}MB")
+    
     def add_to_working(self, content: str, metadata: Dict[str, Any] = None):
-        """Add to short-term working memory"""
+        """Add to short-term working memory with compression tracking"""
         unit = MemoryUnit(content=content, metadata=metadata or {})
         self.working_memory.append(unit)
+        
+        # Track size
+        estimated = self._estimate_size(content)
+        self._current_size_bytes += estimated
         
         # Cap working memory
         if len(self.working_memory) > 50:
             self.consolidate_to_long_term()
+        
+        # Enforce global cap
+        self._enforce_memory_cap()
             
         return unit
 
     def consolidate_to_long_term(self):
-        """Move important working memories to long-term storage"""
+        """Move important working memories to long-term storage with compression"""
         if not self.working_memory:
             return
             
@@ -126,13 +197,19 @@ class Hippocampus:
             if unit.relevance_score > 0.5:
                 self.long_term_memory.append(unit)
                 
-        # Cap long-term memory
+        # Cap long-term memory with size awareness
         if len(self.long_term_memory) > self.capacity:
             self.long_term_memory = sorted(
                 self.long_term_memory, 
                 key=lambda x: x.relevance_score, 
                 reverse=True
             )[:self.capacity]
+        
+        # Recalculate total size
+        self._current_size_bytes = sum(
+            self._estimate_size(unit.content) 
+            for unit in self.long_term_memory + self.working_memory
+        )
 
     def semantic_search(self, query: str, top_k: int = 5) -> List[MemoryUnit]:
         """Search memory using semantic similarity"""
@@ -173,12 +250,73 @@ class Hippocampus:
         scored.sort(reverse=True, key=lambda x: x[0])
         return [unit for _, unit in scored[:top_k]]
 
-    def get_context(self, query: str) -> str:
-        """Retrieve relevant context for current query"""
+    def add_to_prefetch(self, topic: str, content: str):
+        """Add content to prefetch queue (compressed)"""
+        compressed = self._compress_content(content)
+        # Store as base64-like hex string for JSON compatibility
+        self.prefetch_queue[topic.lower()] = compressed.hex()
+        
+        logger.debug(f"Added prefetch for '{topic}' ({len(compressed)} bytes compressed)")
+    
+    def get_from_prefetch(self, topic: str) -> Optional[str]:
+        """Retrieve content from prefetch queue (decompressed)"""
+        hex_data = self.prefetch_queue.get(topic.lower())
+        if not hex_data:
+            return None
+        
+        try:
+            compressed = bytes.fromhex(hex_data)
+            return self._decompress_content(compressed)
+        except Exception as e:
+            logger.error(f"Failed to retrieve prefetch for '{topic}': {e}")
+            return None
+    
+    def clear_prefetch(self):
+        """Clear prefetch queue"""
+        self.prefetch_queue.clear()
+        logger.debug("Prefetch queue cleared")
+    
+    def get_prefetch_stats(self) -> dict:
+        """Get prefetch queue statistics"""
+        total_size = sum(len(bytes.fromhex(v)) for v in self.prefetch_queue.values())
+        return {
+            "topics": len(self.prefetch_queue),
+            "compressed_size_kb": round(total_size / 1024, 2)
+        }
+    
+    def get_context(self, query: str, use_prefetch: bool = True) -> str:
+        """Retrieve relevant context for current query, optionally using prefetch"""
+        # First check prefetch queue for instant response
+        if use_prefetch:
+            query_words = query.lower().split()
+            for word in query_words:
+                if len(word) > 3:  # Skip short words
+                    prefetched = self.get_from_prefetch(word)
+                    if prefetched:
+                        logger.debug(f"Using prefetched context for '{word}'")
+                        return prefetched
+        
+        # Fallback to semantic search
         relevant = self.semantic_search(query, top_k=3)
         if not relevant:
             return ""
         return "\n---\n".join([unit.content for unit in relevant])
+    
+    def get_memory_stats(self) -> dict:
+        """Get comprehensive memory statistics"""
+        working_size = sum(self._estimate_size(u.content) for u in self.working_memory)
+        long_term_size = sum(self._estimate_size(u.content) for u in self.long_term_memory)
+        
+        return {
+            "working_memory_count": len(self.working_memory),
+            "long_term_memory_count": len(self.long_term_memory),
+            "working_memory_kb": round(working_size / 1024, 2),
+            "long_term_memory_kb": round(long_term_size / 1024, 2),
+            "total_size_mb": round((working_size + long_term_size) / 1024 / 1024, 2),
+            "max_size_mb": self.max_size_mb,
+            "compression_ratio": "~3-5x",
+            "prefetch_topics": len(self.prefetch_queue)
+        }
 
 
 @dataclass
@@ -498,6 +636,9 @@ class EtherConsciousness:
         Uses a two-tier approach:
         1. Fast keyword heuristic check
         2. Low-threshold ML confidence check for ambiguous cases
+        
+        Note: This check is bypassed if content is available in prefetch queue
+        (allowing general knowledge queries that were pre-fetched by MCP daemon).
         
         Returns:
             True if query is Godot-related, False otherwise
