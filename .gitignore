@@ -1,54 +1,57 @@
 ```
-# Environment
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
 .env
 .env.local
 *.env.*
 
-# Dependencies
-node_modules/
-.venv/
-venv/
+# Python
 __pycache__/
-.mypy_cache/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.venv.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.sqlite
+*.sqlite3
 .pytest_cache/
-.julia/
-zig*/
-julia-*/
+.mypy_cache/
+.hypothesis/
 
-# Build artifacts
+# Build and distribution
 dist/
 build/
-target/
-*.pyc
-*.class
-*.o
-*.obj
-*.exe
-*.dll
-*.so
-*.a
-*.out
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
 
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
-
-# Editors
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.tmp
 
-# System files
-.DS_Store
-Thumbs.db
-coverage/
-htmlcov/
-.coverage
-
-# Compressed files
+# Compression
 *.zip
 *.gz
 *.tar
@@ -71,4 +74,11 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
+
+# Coverage
+coverage/
+htmlcov/
+
+# Git
+.git/
 ```
