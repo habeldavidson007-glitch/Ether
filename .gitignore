@@ -11,47 +11,44 @@ Thumbs.db
 .env.local
 *.env.*
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
+# Dependencies
+node_modules/
 .venv/
-.venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.sqlite
-*.sqlite3
-.pytest_cache/
+venv/
+__pycache__/
 .mypy_cache/
-.hypothesis/
+.pytest_cache/
+.julia/
+zig*/
+julia-*/
 
-# Build and distribution
+# Build artifacts
 dist/
 build/
-*.egg-info/
-.eggs/
-.installed.cfg
-*.egg
+target/
+*.pyc
+*.class
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
 
-# IDE
+# Editor/IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *.tmp
 
-# Compression
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
 *.zip
 *.gz
 *.tar
@@ -74,11 +71,4 @@ build/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-
-# Coverage
-coverage/
-htmlcov/
-
-# Git
-.git/
 ```
