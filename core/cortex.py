@@ -246,6 +246,12 @@ Respond with your complete chain-of-thought followed by the concrete fix."""
     }
 
 
+# Module-level imports for builder functions (lazy-loaded to avoid circular deps)
+def _get_builder_functions():
+    """Lazy load builder functions to avoid circular imports and speed up startup"""
+    from .builder import analyze, debug, run_pipeline, chat
+    return analyze, debug, run_pipeline, chat
+
 class Cortex:
     """
     Unified Cortex Engine - The Consolidated Brain of Ether
@@ -542,36 +548,36 @@ class Cortex:
         return "\n\n".join(context_parts)
     
     def _run_analyze_pipeline(self, query: str, context: str, step) -> Dict:
-        """Run analysis pipeline - wired to builder.py"""
+        """Run analysis pipeline - wired to builder.py with optimized lazy loading"""
         step("🔍 Analyzing...")
-        # Delegate to builder.py's analyze function
-        from .builder import analyze
+        # Lazy load builder functions
+        analyze_func, _, _, _ = _get_builder_functions()
         try:
-            result_text = analyze(query, context, self.conversation_history)
+            result_text = analyze_func(query, context, self.conversation_history)
             return {"type": "analysis", "text": result_text}
         except Exception as e:
             logger.error(f"Analysis pipeline failed: {e}")
             return {"type": "analysis", "text": f"Analysis of: {query}\n\nContext loaded: {len(context)} chars"}
     
     def _run_debug_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run debug/fix pipeline - wired to builder.py"""
+        """Run debug/fix pipeline - wired to builder.py with optimized lazy loading"""
         step("🐛 Debugging...")
-        # Delegate to builder.py's debug function
-        from .builder import debug
+        # Lazy load builder functions
+        _, debug_func, _, _ = _get_builder_functions()
         try:
-            result = debug(query, context)
+            result = debug_func(query, context)
             return {"type": "debug", "text": result.get("explanation", str(result)), "changes": result.get("changes", [])}
         except Exception as e:
             logger.error(f"Debug pipeline failed: {e}")
             return {"type": "debug", "text": f"Debugging: {query}\n\nTemperature: {temperature}"}
     
     def _run_build_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run build/create pipeline - wired to builder.py"""
+        """Run build/create pipeline - wired to builder.py with optimized lazy loading"""
         step("🔨 Building...")
-        # Delegate to builder.py's build function via run_pipeline
-        from .builder import run_pipeline
+        # Lazy load builder functions
+        _, _, run_pipeline_func, _ = _get_builder_functions()
         try:
-            result, _ = run_pipeline(
+            result, _ = run_pipeline_func(
                 task=query,
                 intent="build",
                 context=context,
@@ -584,12 +590,12 @@ class Cortex:
             return {"type": "build", "text": f"Creating: {query}\n\nTemperature: {temperature}"}
     
     def _run_chat_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run general chat pipeline - wired to builder.py"""
+        """Run general chat pipeline - wired to builder.py with optimized lazy loading"""
         step("💬 Chatting...")
-        # Delegate to builder.py's chat function
-        from .builder import chat
+        # Lazy load builder functions
+        _, _, _, chat_func = _get_builder_functions()
         try:
-            result_text = chat(query, self.conversation_history, context)
+            result_text = chat_func(query, self.conversation_history, context)
             return {"type": "chat", "text": result_text}
         except Exception as e:
             logger.error(f"Chat pipeline failed: {e}")
