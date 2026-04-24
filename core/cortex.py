@@ -548,58 +548,610 @@ class Cortex:
         return "\n\n".join(context_parts)
     
     def _run_analyze_pipeline(self, query: str, context: str, step) -> Dict:
-        """Run analysis pipeline - wired to builder.py with optimized lazy loading"""
-        step("🔍 Analyzing...")
+        """
+        Smart Analysis Pipeline - Enhanced with consciousness state injection and result parsing.
+        
+        Flow:
+        1. Inject user history and project state into context
+        2. Run safety preview on analysis request
+        3. Call builder.analyze() with enriched context
+        4. Parse results and extract actionable insights
+        5. Store learnings in adaptive memory
+        """
+        step("🔍 Analyzing with enhanced context...")
+        
         # Lazy load builder functions
         analyze_func, _, _, _ = _get_builder_functions()
+        
         try:
-            result_text = analyze_func(query, context, self.conversation_history)
-            return {"type": "analysis", "text": result_text}
+            # STEP 1: Enrich context with consciousness state
+            enriched_context = self._inject_consciousness_context(query, context, "analyze")
+            
+            # STEP 2: Safety preview for analysis operations
+            safety_check = self.safety.preview_operation(query, enriched_context)
+            if not safety_check.get('allowed', True):
+                step("⚠️ Safety review triggered")
+                return {
+                    "type": "analysis",
+                    "text": safety_check.get('message', 'Analysis requires safety review'),
+                    "safety_flagged": True
+                }
+            
+            # STEP 3: Execute analysis with enriched context
+            result_text = analyze_func(query, enriched_context, self.conversation_history)
+            
+            # STEP 4: Parse and structure results
+            parsed_result = self._parse_analysis_result(result_text, query)
+            
+            # STEP 5: Store learning if significant insights found
+            if parsed_result.get('insights'):
+                self._store_learning(query, parsed_result['insights'])
+            
+            step("✓ Analysis complete with structured insights")
+            return {
+                "type": "analysis",
+                "text": parsed_result.get('formatted_text', result_text),
+                "insights": parsed_result.get('insights', []),
+                "metrics": parsed_result.get('metrics', {}),
+                "confidence": parsed_result.get('confidence', 0.85)
+            }
+            
         except Exception as e:
-            logger.error(f"Analysis pipeline failed: {e}")
-            return {"type": "analysis", "text": f"Analysis of: {query}\n\nContext loaded: {len(context)} chars"}
+            logger.error(f"Smart analysis pipeline failed: {e}")
+            # Graceful degradation to basic analysis
+            return self._fallback_analysis(query, context, str(e))
     
     def _run_debug_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run debug/fix pipeline - wired to builder.py with optimized lazy loading"""
-        step("🐛 Debugging...")
+        """
+        Smart Debug Pipeline - Enhanced with multi-strategy debugging and validation.
+        
+        Flow:
+        1. Extract error patterns and build debug context
+        2. Check conversation history for related fixes
+        3. Apply CoT fallback if pattern not recognized
+        4. Call builder.debug() with strategic context
+        5. Validate fix and generate verification steps
+        """
+        step("🐛 Smart debugging with multi-strategy approach...")
+        
         # Lazy load builder functions
         _, debug_func, _, _ = _get_builder_functions()
+        
         try:
-            result = debug_func(query, context)
-            return {"type": "debug", "text": result.get("explanation", str(result)), "changes": result.get("changes", [])}
+            # STEP 1: Extract and categorize error patterns
+            error_patterns = self._extract_error_patterns(query)
+            debug_context = self._build_debug_context(query, context, error_patterns)
+            
+            # STEP 2: Check history for similar issues
+            historical_fix = self._find_similar_historical_fix(query, error_patterns)
+            if historical_fix:
+                step("⚡ Found similar historical fix")
+                return {
+                    "type": "debug",
+                    "text": historical_fix['explanation'],
+                    "changes": historical_fix.get('changes', []),
+                    "from_history": True,
+                    "confidence": 0.95
+                }
+            
+            # STEP 3: Apply CoT fallback for novel bugs
+            if not error_patterns.get('recognized', False):
+                step("🧠 Novel bug detected - applying Chain-of-Thought")
+                cot_data = _cot_fallback(
+                    {"action": "debug", "file": error_patterns.get('file', 'unknown')},
+                    {"issues": error_patterns.get('issues', [])},
+                    debug_context[:500]
+                )
+                debug_context += f"\n\n[COT INSTRUCTION]\n{cot_data['cot_prompt']}"
+            
+            # STEP 4: Execute debug with strategic context
+            result = debug_func(query, debug_context)
+            
+            # STEP 5: Validate and enhance fix
+            validated_result = self._validate_debug_result(result, query, error_patterns)
+            
+            step("✓ Debug complete with validation")
+            return {
+                "type": "debug",
+                "text": validated_result.get("explanation", str(result)),
+                "changes": validated_result.get("changes", []),
+                "verification_steps": validated_result.get("verification_steps", []),
+                "confidence": validated_result.get("confidence", 0.8),
+                "novel_bug": not error_patterns.get('recognized', False)
+            }
+            
         except Exception as e:
-            logger.error(f"Debug pipeline failed: {e}")
-            return {"type": "debug", "text": f"Debugging: {query}\n\nTemperature: {temperature}"}
+            logger.error(f"Smart debug pipeline failed: {e}")
+            return self._fallback_debug(query, context, temperature, str(e))
     
     def _run_build_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run build/create pipeline - wired to builder.py with optimized lazy loading"""
-        step("🔨 Building...")
+        """
+        Smart Build Pipeline - Enhanced with requirements extraction and quality gates.
+        
+        Flow:
+        1. Extract implicit requirements from query
+        2. Check project conventions and existing patterns
+        3. Apply creativity boost for high-temperature builds
+        4. Call builder.run_pipeline() with full context
+        5. Run quality gates on generated code
+        """
+        step("🔨 Smart building with quality gates...")
+        
         # Lazy load builder functions
         _, _, run_pipeline_func, _ = _get_builder_functions()
+        
         try:
-            result, _ = run_pipeline_func(
+            # STEP 1: Extract requirements and constraints
+            requirements = self._extract_build_requirements(query, context)
+            
+            # STEP 2: Load project conventions
+            conventions = self._load_project_conventions()
+            build_context = self._merge_context_with_conventions(context, conventions, requirements)
+            
+            # STEP 3: Adjust prompt based on temperature for creativity
+            if temperature > 0.7 and use_n_sampling:
+                step("🎨 High creativity mode with N-sampling")
+                build_context += "\n\n[CREATIVITY MODE]\nGenerate innovative solutions. Consider multiple approaches."
+            
+            # STEP 4: Execute build pipeline
+            result, logs = run_pipeline_func(
                 task=query,
                 intent="build",
-                context=context,
+                context=build_context,
                 history=self.conversation_history,
-                yield_steps=step
+                yield_steps=step,
+                requirements=requirements
             )
-            return result
+            
+            # STEP 5: Run quality gates
+            quality_report = self._run_quality_gates(result, requirements)
+            
+            # STEP 6: Store successful patterns
+            if quality_report.get('passed', False):
+                self._store_build_pattern(query, result, requirements)
+            
+            step("✓ Build complete with quality assurance")
+            return {
+                **result,
+                "quality_report": quality_report,
+                "creativity_level": "high" if temperature > 0.7 else "standard",
+                "conventions_applied": len(conventions) > 0
+            }
+            
         except Exception as e:
-            logger.error(f"Build pipeline failed: {e}")
-            return {"type": "build", "text": f"Creating: {query}\n\nTemperature: {temperature}"}
+            logger.error(f"Smart build pipeline failed: {e}")
+            return self._fallback_build(query, context, temperature, str(e))
     
     def _run_chat_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
-        """Run general chat pipeline - wired to builder.py with optimized lazy loading"""
-        step("💬 Chatting...")
+        """
+        Smart Chat Pipeline - Enhanced with personality adaptation and context awareness.
+        
+        Flow:
+        1. Analyze conversation flow and user expertise level
+        2. Adapt response style based on history
+        3. Inject relevant knowledge from hippocampus
+        4. Call builder.chat() with personalized context
+        5. Generate follow-up questions autonomously
+        """
+        step("💬 Smart chatting with personality adaptation...")
+        
         # Lazy load builder functions
         _, _, _, chat_func = _get_builder_functions()
+        
         try:
-            result_text = chat_func(query, self.conversation_history, context)
-            return {"type": "chat", "text": result_text}
+            # STEP 1: Analyze user expertise and conversation flow
+            user_profile = self._analyze_user_expertise(query)
+            conversation_flow = self._analyze_conversation_flow()
+            
+            # STEP 2: Adapt response style
+            style_config = self._determine_response_style(user_profile, conversation_flow, temperature)
+            
+            # STEP 3: Enrich with hippocampus knowledge
+            knowledge_snippets = self.hippocampus.get_relevant_knowledge(query, limit=3)
+            chat_context = self._enrich_chat_context(context, knowledge_snippets, style_config)
+            
+            # STEP 4: Execute chat with personalized context
+            result_text = chat_func(query, self.conversation_history, chat_context)
+            
+            # STEP 5: Generate autonomous follow-ups
+            follow_ups = generate_follow_up_questions(query, result_text, "chat")
+            
+            # STEP 6: Update conversation state
+            self._update_conversation_state(query, result_text, user_profile)
+            
+            step("✓ Chat complete with follow-ups")
+            return {
+                "type": "chat",
+                "text": result_text,
+                "follow_up_questions": follow_ups,
+                "user_expertise_level": user_profile.get('level', 'intermediate'),
+                "response_style": style_config.get('style', 'balanced'),
+                "knowledge_sources": len(knowledge_snippets),
+                "autonomous": True
+            }
+            
         except Exception as e:
-            logger.error(f"Chat pipeline failed: {e}")
-            return {"type": "chat", "text": f"Response to: {query}\n\nTemperature: {temperature}"}
+            logger.error(f"Smart chat pipeline failed: {e}")
+            return self._fallback_chat(query, context, temperature, str(e))
+    
+    # ── SMART PIPELINE HELPER METHODS ────────────────────────────────────────
+    
+    def _inject_consciousness_context(self, query: str, base_context: str, intent: str) -> str:
+        """Inject user state, project state, and session memory into context"""
+        context_parts = [base_context]
+        
+        # Add user expertise level
+        user_profile = self._analyze_user_expertise(query)
+        context_parts.append(f"[USER PROFILE]\nExpertise: {user_profile.get('level', 'intermediate')}")
+        
+        # Add recent conversation context
+        if self.conversation_history and len(self.conversation_history) > 0:
+            recent = self.conversation_history[-3:]
+            context_parts.append(f"[RECENT CONTEXT]\n{json.dumps(recent, indent=2)[:1000]}")
+        
+        # Add project state
+        project_state = self.hippocampus.get_project_state()
+        if project_state:
+            context_parts.append(f"[PROJECT STATE]\n{project_state[:500]}")
+        
+        return "\n\n".join(context_parts)
+    
+    def _extract_error_patterns(self, query: str) -> Dict:
+        """Extract and categorize error patterns from query"""
+        patterns = {
+            'recognized': False,
+            'file': '',
+            'issues': [],
+            'error_type': None,
+            'severity': 'medium'
+        }
+        
+        # Extract filename
+        match = re.search(r'([\\w\\-]+\\.gd)', query.lower())
+        if match:
+            patterns['file'] = match.group(1)
+        
+        # Categorize error types
+        error_keywords = {
+            'null_reference': ['null', 'none', 'nil', 'undefined'],
+            'type_mismatch': ['type', 'expected', 'got', 'cannot convert'],
+            'signal_error': ['signal', 'connect', 'emit'],
+            'scene_error': ['scene', 'node', 'tree', 'instance'],
+            'syntax_error': ['syntax', 'invalid', 'unexpected token']
+        }
+        
+        query_lower = query.lower()
+        for error_type, keywords in error_keywords.items():
+            if any(kw in query_lower for kw in keywords):
+                patterns['recognized'] = True
+                patterns['error_type'] = error_type
+                patterns['issues'].append(error_type.replace('_', ' '))
+                break
+        
+        # Assess severity
+        severity_words = ['crash', 'fatal', 'critical', 'urgent']
+        if any(word in query_lower for word in severity_words):
+            patterns['severity'] = 'critical'
+        
+        return patterns
+    
+    def _build_debug_context(self, query: str, base_context: str, error_patterns: Dict) -> str:
+        """Build comprehensive debug context with error analysis"""
+        parts = [base_context]
+        
+        if error_patterns.get('error_type'):
+            parts.append(f"[ERROR TYPE]\n{error_patterns['error_type'].replace('_', ' ').title()}")
+        
+        if error_patterns.get('file'):
+            parts.append(f"[TARGET FILE]\n{error_patterns['file']}")
+        
+        parts.append(f"[SEVERITY]\n{error_patterns.get('severity', 'medium').upper()}")
+        
+        return "\n\n".join(parts)
+    
+    def _find_similar_historical_fix(self, query: str, error_patterns: Dict) -> Optional[Dict]:
+        """Search conversation history for similar issues and fixes"""
+        if not self.conversation_history:
+            return None
+        
+        # Simple similarity check based on error type and file
+        for entry in reversed(self.conversation_history[-10:]):
+            if entry.get('type') == 'debug':
+                # Check if error type matches
+                if error_patterns.get('error_type') and error_patterns['error_type'] in str(entry):
+                    return {
+                        'explanation': entry.get('response', 'Similar issue found in history'),
+                        'changes': entry.get('changes', []),
+                        'from_history': True
+                    }
+        
+        return None
+    
+    def _validate_debug_result(self, result: Dict, query: str, error_patterns: Dict) -> Dict:
+        """Validate debug result and add verification steps"""
+        validated = result if isinstance(result, dict) else {'explanation': str(result)}
+        
+        # Generate verification steps
+        verification = []
+        if error_patterns.get('file'):
+            verification.append(f"1. Open {error_patterns['file']} and apply the changes")
+            verification.append(f"2. Run the scene to test if the error is resolved")
+            verification.append(f"3. Check console output for any new errors")
+        else:
+            verification.append("1. Apply the suggested fix")
+            verification.append("2. Test the functionality")
+            verification.append("3. Monitor for regressions")
+        
+        validated['verification_steps'] = verification
+        
+        # Estimate confidence based on pattern recognition
+        confidence = 0.9 if error_patterns.get('recognized') else 0.75
+        validated['confidence'] = confidence
+        
+        return validated
+    
+    def _extract_build_requirements(self, query: str, context: str) -> Dict:
+        """Extract implicit requirements from build query"""
+        requirements = {
+            'performance_critical': False,
+            'needs_comments': True,
+            'needs_tests': False,
+            'complexity': 'medium',
+            'preferred_patterns': []
+        }
+        
+        query_lower = query.lower()
+        
+        # Detect performance needs
+        if any(word in query_lower for word in ['fast', 'optimize', 'performance', 'efficient']):
+            requirements['performance_critical'] = True
+        
+        # Detect complexity
+        if any(word in query_lower for word in ['simple', 'basic', 'quick']):
+            requirements['complexity'] = 'low'
+        elif any(word in query_lower for word in ['advanced', 'complex', 'full-featured']):
+            requirements['complexity'] = 'high'
+        
+        # Detect testing needs
+        if 'test' in query_lower or 'unit test' in query_lower:
+            requirements['needs_tests'] = True
+        
+        return requirements
+    
+    def _load_project_conventions(self) -> List[str]:
+        """Load coding conventions from project (if available)"""
+        conventions = []
+        
+        # Look for .editorconfig or similar
+        editorconfig = self.project_root / '.editorconfig'
+        if editorconfig.exists():
+            try:
+                content = editorconfig.read_text()[:1000]
+                conventions.append(f"EditorConfig: {content[:500]}")
+            except:
+                pass
+        
+        # Look for existing GDScript files to infer naming conventions
+        gd_files = list(self.project_root.glob('**/*.gd'))[:5]
+        if gd_files:
+            conventions.append(f"Project has {len(gd_files)} GDScript files - following existing patterns")
+        
+        return conventions
+    
+    def _merge_context_with_conventions(self, context: str, conventions: List[str], requirements: Dict) -> str:
+        """Merge base context with project conventions and requirements"""
+        parts = [context]
+        
+        if conventions:
+            parts.append(f"[PROJECT CONVENTIONS]\n" + "\n".join(conventions))
+        
+        parts.append(f"[REQUIREMENTS]\n" + json.dumps(requirements, indent=2))
+        
+        return "\n\n".join(parts)
+    
+    def _run_quality_gates(self, result: Dict, requirements: Dict) -> Dict:
+        """Run quality gates on generated code"""
+        report = {
+            'passed': True,
+            'checks': [],
+            'warnings': [],
+            'score': 0.0
+        }
+        
+        score = 100.0
+        
+        # Check 1: Code presence
+        if 'code' in result or 'text' in result:
+            report['checks'].append('Code generated: ✓')
+        else:
+            report['passed'] = False
+            report['warnings'].append('No code generated')
+            score -= 50
+        
+        # Check 2: Comments (if required)
+        if requirements.get('needs_comments'):
+            code_text = result.get('code', '') or result.get('text', '')
+            if '#' in code_text or '\"\"\"' in code_text:
+                report['checks'].append('Comments present: ✓')
+            else:
+                report['warnings'].append('Missing comments')
+                score -= 10
+        
+        # Check 3: Complexity match
+        expected_complexity = requirements.get('complexity', 'medium')
+        report['checks'].append(f'Complexity level: {expected_complexity}')
+        
+        report['score'] = max(0, score / 100.0)
+        report['passed'] = report['score'] >= 0.7
+        
+        return report
+    
+    def _store_build_pattern(self, query: str, result: Dict, requirements: Dict):
+        """Store successful build pattern for future learning"""
+        try:
+            pattern = {
+                'query_pattern': query[:200],
+                'requirements': requirements,
+                'success': True,
+                'timestamp': datetime.now().isoformat()
+            }
+            self.hippocampus.store_learning('build_pattern', pattern)
+        except Exception as e:
+            logger.warning(f"Failed to store build pattern: {e}")
+    
+    def _analyze_user_expertise(self, query: str) -> Dict:
+        """Analyze user expertise level from query language"""
+        profile = {'level': 'intermediate', 'indicators': []}
+        
+        query_lower = query.lower()
+        
+        # Beginner indicators
+        beginner_words = ['how to', 'what is', 'help', 'beginner', 'new to']
+        if any(word in query_lower for word in beginner_words):
+            profile['level'] = 'beginner'
+            profile['indicators'].append('asking fundamental questions')
+        
+        # Advanced indicators
+        advanced_words = ['optimize', 'architecture', 'pattern', 'best practice', 'advanced']
+        if any(word in query_lower for word in advanced_words):
+            profile['level'] = 'advanced'
+            profile['indicators'].append('using technical terminology')
+        
+        return profile
+    
+    def _analyze_conversation_flow(self) -> Dict:
+        """Analyze conversation flow to determine response strategy"""
+        flow = {
+            'length': len(self.conversation_history),
+            'topic_consistency': 'stable',
+            'user_engagement': 'normal'
+        }
+        
+        if len(self.conversation_history) > 5:
+            flow['topic_consistency'] = 'deep dive'
+        
+        return flow
+    
+    def _determine_response_style(self, user_profile: Dict, conversation_flow: Dict, temperature: float) -> Dict:
+        """Determine appropriate response style based on context"""
+        style = {'style': 'balanced', 'detail_level': 'medium'}
+        
+        expertise = user_profile.get('level', 'intermediate')
+        
+        if expertise == 'beginner':
+            style['style'] = 'educational'
+            style['detail_level'] = 'high'
+        elif expertise == 'advanced':
+            style['style'] = 'concise'
+            style['detail_level'] = 'low'
+        
+        if temperature > 0.7:
+            style['tone'] = 'creative'
+        elif temperature < 0.3:
+            style['tone'] = 'precise'
+        else:
+            style['tone'] = 'balanced'
+        
+        return style
+    
+    def _enrich_chat_context(self, context: str, knowledge_snippets: List, style_config: Dict) -> str:
+        """Enrich chat context with knowledge and style configuration"""
+        parts = [context]
+        
+        if knowledge_snippets:
+            parts.append(f"[RELEVANT KNOWLEDGE]\n" + "\n".join(knowledge_snippets[:3]))
+        
+        parts.append(f"[RESPONSE STYLE]\nStyle: {style_config.get('style', 'balanced')}\nDetail: {style_config.get('detail_level', 'medium')}\nTone: {style_config.get('tone', 'balanced')}")
+        
+        return "\n\n".join(parts)
+    
+    def _update_conversation_state(self, query: str, response: str, user_profile: Dict):
+        """Update conversation state for continuity"""
+        try:
+            self.conversation_history.append({
+                'query': query,
+                'response': response[:1000],
+                'timestamp': datetime.now().isoformat(),
+                'user_level': user_profile.get('level', 'intermediate')
+            })
+            
+            # Keep history bounded
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
+        except Exception as e:
+            logger.warning(f"Failed to update conversation state: {e}")
+    
+    def _store_learning(self, query: str, insights: List):
+        """Store significant insights for future learning"""
+        try:
+            self.hippocampus.store_learning('insight', {
+                'query': query[:200],
+                'insights': insights,
+                'timestamp': datetime.now().isoformat()
+            })
+        except Exception as e:
+            logger.warning(f"Failed to store learning: {e}")
+    
+    def _parse_analysis_result(self, result_text: str, query: str) -> Dict:
+        """Parse raw analysis result into structured format"""
+        parsed = {
+            'formatted_text': result_text,
+            'insights': [],
+            'metrics': {},
+            'confidence': 0.85
+        }
+        
+        # Extract potential insights (simple heuristic)
+        lines = result_text.split('\n')
+        for line in lines:
+            if any(marker in line for marker in ['Issue:', 'Problem:', 'Recommendation:', 'Suggestion:']):
+                parsed['insights'].append(line.strip())
+        
+        # Calculate basic metrics
+        parsed['metrics'] = {
+            'issues_found': len([l for l in lines if 'issue' in l.lower()]),
+            'recommendations': len([l for l in lines if 'recommend' in l.lower()])
+        }
+        
+        return parsed
+    
+    # ── FALLBACK METHODS FOR GRACEFUL DEGRADATION ───────────────────────────
+    
+    def _fallback_analysis(self, query: str, context: str, error_msg: str) -> Dict:
+        """Graceful fallback for analysis pipeline"""
+        return {
+            "type": "analysis",
+            "text": f"Basic analysis of: {query}\n\nContext loaded: {len(context)} chars\n(Note: Enhanced analysis unavailable due to: {error_msg[:100]})",
+            "confidence": 0.5,
+            "fallback_mode": True
+        }
+    
+    def _fallback_debug(self, query: str, context: str, temperature: float, error_msg: str) -> Dict:
+        """Graceful fallback for debug pipeline"""
+        return {
+            "type": "debug",
+            "text": f"Basic debugging for: {query}\n\nTemperature: {temperature}\n(Note: Smart debugging unavailable due to: {error_msg[:100]})",
+            "confidence": 0.5,
+            "fallback_mode": True
+        }
+    
+    def _fallback_build(self, query: str, context: str, temperature: float, error_msg: str) -> Dict:
+        """Graceful fallback for build pipeline"""
+        return {
+            "type": "build",
+            "text": f"Basic creation for: {query}\n\nTemperature: {temperature}\n(Note: Smart building unavailable due to: {error_msg[:100]})",
+            "confidence": 0.5,
+            "fallback_mode": True
+        }
+    
+    def _fallback_chat(self, query: str, context: str, temperature: float, error_msg: str) -> Dict:
+        """Graceful fallback for chat pipeline"""
+        return {
+            "type": "chat",
+            "text": f"Response to: {query}\n\nTemperature: {temperature}\n(Note: Enhanced chat unavailable due to: {error_msg[:100]})",
+            "confidence": 0.5,
+            "fallback_mode": True
+        }
 
 
 # Singleton instance

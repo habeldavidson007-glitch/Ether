@@ -1491,6 +1491,7 @@ def run_pipeline(
     chat_mode: str = "mixed",  # unused — kept for app.py compat
     prefetch_context: str = None,  # NEW Phase 11.2: Prefetched knowledge context
     used_prefetch: bool = False,   # NEW Phase 11.2: Flag indicating prefetch usage
+    requirements: Dict = None,     # NEW Smart Pipeline: Requirements from cortex
 ) -> Tuple[Dict, List[str]]:
     """
     Main pipeline. Signature unchanged from v1.9.

@@ -208,6 +208,29 @@ class Hippocampus:
         self.memories.clear()
         self.prefetch_queue.clear()
         self.total_size_bytes = 0
+    
+    def get_project_state(self) -> Optional[str]:
+        """Get current project state summary (stub for future implementation)."""
+        # Return a basic project state placeholder
+        return "Project state tracking active"
+    
+    def get_relevant_knowledge(self, query: str, limit: int = 3) -> List[str]:
+        """Get relevant knowledge snippets for a query (stub for future implementation)."""
+        # Check prefetch queue first
+        result = self.check_prefetch(query)
+        if result:
+            return [result['content'][:500]]
+        return []
+    
+    def store_learning(self, learning_type: str, data: Dict) -> bool:
+        """Store a learning entry for future use (stub for future implementation)."""
+        try:
+            key = f"{learning_type}_{len(self.memories)}"
+            content = json.dumps(data)
+            return self.store(key, content, intent="learning", priority=2)
+        except Exception as e:
+            logger.warning(f"Failed to store learning: {e}")
+            return False
 
 
 # ── CORTEX (Intent Classification) ────────────────────────────────────────────
@@ -397,6 +420,24 @@ class SafetyGuard:
         text = re.sub(r'`[^`]+`', '[REMOVED]', text)
         
         return text
+    
+    def preview_operation(self, query: str, context: str) -> Dict:
+        """
+        Preview an operation for safety before execution.
+        
+        Returns: {"allowed": bool, "message": str}
+        """
+        # Check query for dangerous patterns
+        is_safe, reason = self.check_code(query)
+        if not is_safe:
+            return {"allowed": False, "message": f"Safety concern: {reason}"}
+        
+        # Check context for dangerous patterns
+        is_safe, reason = self.check_code(context)
+        if not is_safe:
+            return {"allowed": False, "message": f"Safety concern in context: {reason}"}
+        
+        return {"allowed": True, "message": "Operation passed safety check"}
 
 
 # ── EFFECTOR REGISTRY ─────────────────────────────────────────────────────────
