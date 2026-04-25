@@ -49,14 +49,6 @@ from core.unified_search import get_unified_search
 from core.adaptive_memory import get_adaptive_memory
 from core.safety_preview import get_safety_preview
 from core.feedback_commands import get_feedback_manager
-from core.benchmark_enhancer import (
-    get_instruction_enforcer,
-    get_reasoning_scaffold,
-    get_code_validator,
-    get_debug_analyzer,
-    get_hallucination_guard,
-    get_context_manager
-)
 from personality import get_composer, Conductor, MeasureLibrary, CompositionalCortex
 
 logger = logging.getLogger(__name__)
@@ -450,14 +442,6 @@ class Cortex:
         if self.watchdog:
             self.watchdog.register_callback(self._on_watchdog_event)
         
-        # BENCHMARK ENHANCEMENT MODULES (Categories 1-8, 10)
-        # These provide critical functionality for scoring 93+ on benchmarks
-        self.instruction_enforcer = get_instruction_enforcer()  # Category 1
-        self.reasoning_scaffold = get_reasoning_scaffold()      # Category 2
-        self.code_validator = get_code_validator('gdscript')    # Category 3
-        self.debug_analyzer = get_debug_analyzer()              # Category 4
-        self.hallucination_guard = get_hallucination_guard()    # Category 8
-        self.context_manager = get_context_manager(max_history=20)  # Category 5
         
         # Compositional architecture (musical measure engine) - DISABLED BY DEFAULT
         # Enable only for social/creative queries (~20% of use cases)
@@ -970,12 +954,12 @@ class Cortex:
         
         try:
             # STEP 0: Extract explicit constraints from query (Category 1: Instruction Following)
-            constraints = self.instruction_enforcer.extract_constraints(query)
+            constraints = self._extract_query_constraints(query)
             step(f"📋 Constraints detected: {constraints['raw_constraints']}")
             
             # STEP 1: Enrich context with consciousness state AND constraint injection
             enriched_context = self._inject_consciousness_context(query, context, "analyze")
-            constraint_instruction = self.instruction_enforcer.build_constraint_instruction(constraints)
+            constraint_instruction = self._build_constraint_instruction(constraints)
             enriched_context += f"\n\n[OUTPUT CONSTRAINTS]\n{constraint_instruction}"
             
             # STEP 2: Safety preview for analysis operations
@@ -998,7 +982,7 @@ class Cortex:
             )
             
             # STEP 4: Validate output against constraints (Category 1 enforcement)
-            validation_result = self.instruction_enforcer.validate_output(result_text, constraints)
+            validation_result = self._validate_output_constraints(result_text, constraints)
             if not validation_result['valid']:
                 step(f"⚠️ Constraint violation: {validation_result['issues']}")
                 # Attempt to fix by re-running with stricter instructions
@@ -1052,12 +1036,12 @@ class Cortex:
         
         try:
             # STEP 1: Analyze debug query with multi-strategy approach (Category 4)
-            debug_analysis = self.debug_analyzer.analyze_debug_query(query, context)
+            debug_analysis = self._analyze_debug_query(query, context)
             step(f"🔍 Debug strategy identified: {debug_analysis['strategy']} (confidence: {debug_analysis['confidence']:.2f})")
             
             # STEP 2: Build enhanced debug context with reasoning scaffold (Category 2)
             if debug_analysis['strategy']:
-                reasoning_prompt = self.reasoning_scaffold.build_reasoning_prompt(
+                reasoning_prompt = self._build_reasoning_prompt(
                     'contradiction_detection' if debug_analysis['strategy'] in ['null_reference', 'signal_mismatch'] else 'trace_execution',
                     obs_1="Error pattern detected in code",
                     obs_2=f"Strategy match: {debug_analysis['strategy']}",
@@ -1101,7 +1085,7 @@ class Cortex:
             
             # STEP 6: Generate line-specific fix using debug analyzer (Category 4 requirement)
             if debug_analysis['strategy']:
-                specific_fix = self.debug_analyzer.generate_specific_fix(
+                specific_fix = self._generate_specific_fix(
                     debug_analysis['strategy'], 
                     context,
                     line_number=None  # Will be extracted from result if available
@@ -1142,7 +1126,7 @@ class Cortex:
         
         try:
             # STEP 1: Extract requirements and constraints using instruction enforcer (Category 1)
-            constraints = self.instruction_enforcer.extract_constraints(query)
+            constraints = self._extract_query_constraints(query)
             requirements = self._extract_build_requirements(query, context)
             requirements['constraints'] = constraints
             
@@ -1151,7 +1135,7 @@ class Cortex:
             build_context = self._merge_context_with_conventions(context, conventions, requirements)
             
             # Add constraint instructions to build context
-            constraint_instruction = self.instruction_enforcer.build_constraint_instruction(constraints)
+            constraint_instruction = self._build_constraint_instruction(constraints)
             if constraint_instruction:
                 build_context += f"\n\n{constraint_instruction}"
             
@@ -1170,9 +1154,9 @@ class Cortex:
             
             # STEP 5: Validate generated code quality (Category 3)
             code_text = result.get('code', str(result))
-            syntax_validation = self.code_validator.validate_syntax(code_text)
-            pattern_validation = self.code_validator.validate_pattern(code_text, 'singleton_gdscript' if 'singleton' in query.lower() else 'stack_data_structure')
-            edge_case_check = self.code_validator.check_edge_cases(code_text, requirements)
+            syntax_validation = self._validate_code_syntax(code_text)
+            pattern_validation = self._validate_code_pattern(code_text, 'singleton_gdscript' if 'singleton' in query.lower() else 'stack_data_structure')
+            edge_case_check = self._check_code_edge_cases(code_text, requirements)
             
             quality_report = {
                 'syntax_valid': syntax_validation['valid'],
