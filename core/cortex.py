@@ -644,13 +644,16 @@ class Cortex:
                 follow_ups = generate_follow_up_questions(query, result['text'], complex_intent)
                 result['follow_ups'] = follow_ups
             
-            # Store in conversation history
+            # Store in conversation history with automatic bounding to 20 entries (conversational flow)
             self.conversation_history.append({
                 "query": query,
                 "response": result.get('text', ''),
                 "intent": complex_intent,
                 "timestamp": datetime.now().isoformat()
             })
+            # Enforce hard limit of 20 entries for context retention benchmark
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
             
             return result, log
     
@@ -741,13 +744,16 @@ class Cortex:
                 follow_ups = generate_follow_up_questions(query, result['text'], complex_intent)
                 result['follow_ups'] = follow_ups
             
-            # Store in conversation history
+            # Store in conversation history with automatic bounding to 20 entries (async path)
             self.conversation_history.append({
                 "query": query,
                 "response": result.get('text', ''),
                 "intent": complex_intent,
                 "timestamp": datetime.now().isoformat()
             })
+            # Enforce hard limit of 20 entries for context retention benchmark
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
             
             return result, log
     
@@ -808,7 +814,7 @@ class Cortex:
             # Generate follow-ups based on composed content
             follow_ups = generate_follow_up_questions(query, response_text, "compositional")
             
-            # Store in conversation history
+            # Store in conversation history with automatic bounding to 20 entries (compositional path)
             self.conversation_history.append({
                 "query": query,
                 "response": response_text,
@@ -816,6 +822,9 @@ class Cortex:
                 "timestamp": datetime.now().isoformat(),
                 "composition": metadata
             })
+            # Enforce hard limit of 20 entries for context retention benchmark
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
             
             # Build result with composition metadata
             result = {
