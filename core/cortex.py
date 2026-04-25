@@ -564,7 +564,16 @@ class Cortex:
             prefetch_context = prefetch_result.get('content', '')
             used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # STEP 1: Detect intent using fast regex patterns (check greeting FIRST)
+        fast_intent = self._detect_intent_fast(query)
+        
+        # FAST PATH: Allow greetings regardless of domain
+        if fast_intent == 'greeting':
+            step("⚡ Fast path (greeting)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
         if not self.is_godot_related(query) and not used_prefetch:
             step("🚫 Off-domain query detected")
             # Extract topic from query for polite refusal
@@ -575,16 +584,6 @@ class Cortex:
             
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
-        
-        # STEP 2: Detect intent using fast regex patterns
-        fast_intent = self._detect_intent_fast(query)
-        
-        # STEP 3: Route based on intent
-        if fast_intent == 'greeting':
-            # FAST PATH: Instant greeting response
-            step("⚡ Fast path (greeting)")
-            response = self._get_fast_response(fast_intent, query)
-            return {"type": "chat", "text": response, "fast_path": True}, log
         
         elif fast_intent == 'status':
             # FAST PATH: Status from cached stats (no LLM needed)
@@ -682,7 +681,16 @@ class Cortex:
             prefetch_context = prefetch_result.get('content', '')
             used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # STEP 1: Detect intent using fast regex patterns (check greeting FIRST)
+        fast_intent = self._detect_intent_fast(query)
+        
+        # FAST PATH: Allow greetings regardless of domain
+        if fast_intent == 'greeting':
+            step("⚡ Fast path (greeting)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
         if not self.is_godot_related(query) and not used_prefetch:
             step("🚫 Off-domain query detected")
             stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
@@ -693,16 +701,8 @@ class Cortex:
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
         
-        # STEP 2: Detect intent using fast regex patterns
-        fast_intent = self._detect_intent_fast(query)
-        
         # STEP 3: Route based on intent
-        if fast_intent == 'greeting':
-            step("⚡ Fast path (greeting)")
-            response = self._get_fast_response(fast_intent, query)
-            return {"type": "chat", "text": response, "fast_path": True}, log
-        
-        elif fast_intent == 'status':
+        if fast_intent == 'status':
             step("⚡ Fast path (status)")
             response = self._get_fast_response(fast_intent, query)
             return {"type": "chat", "text": response, "fast_path": True}, log

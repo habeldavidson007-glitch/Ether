@@ -1,14 +1,12 @@
-```
-# Compiled Python files
-*.pyc
+```gitignore
+# Python cache files
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment files
-.env
-.env.local
-*.env.*
+# Compiled Python files in specific directories
+core/__pycache__/
+ether/core/__pycache__/
+personality/__pycache__/
 ```
