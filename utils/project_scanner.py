@@ -220,3 +220,41 @@ class ProjectScanner:
             'has_static_analyzer': self.static_analyzer is not None,
             'has_memory_core': self.memory_core is not None
         }
+
+
+# Legacy compatibility functions
+def build_project_map(project_path: str) -> Dict[str, Any]:
+    """Legacy compatibility function for build_project_map."""
+    scanner = ProjectScanner()
+    results = scanner.scan_flat(project_path)
+    return {r.file_path: {'issues': r.issues, 'dependencies': r.dependencies} for r in results}
+
+
+def extract_zip(zip_path: str, dest_path: str) -> bool:
+    """Legacy compatibility function for extract_zip."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(dest_path)
+        return True
+    except Exception:
+        return False
+
+
+def select_context(files: List[str], max_tokens: int = 4000) -> List[str]:
+    """Legacy compatibility function for select_context."""
+    # Simple selection: return files until max_tokens reached
+    selected = []
+    total_tokens = 0
+    for f in files:
+        try:
+            with open(f, 'r', encoding='utf-8') as file:
+                tokens = len(file.read().split())
+        except Exception:
+            tokens = 100
+        if total_tokens + tokens <= max_tokens:
+            selected.append(f)
+            total_tokens += tokens
+        else:
+            break
+    return selected
