@@ -3,11 +3,41 @@ Test configuration and fixtures for Ether test suite.
 """
 import pytest
 import sys
+import asyncio
+import inspect
 from pathlib import Path
 
 # Add the workspace root to the path so we can import ether modules
 ROOT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT_DIR))
+
+
+def pytest_configure(config):
+    """Register custom markers used by the test suite."""
+    config.addinivalue_line(
+        "markers",
+        "asyncio: run test using asyncio without requiring external plugins"
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    """
+    Lightweight async test runner fallback.
+    Runs coroutine test functions and tests marked with @pytest.mark.asyncio.
+    """
+    is_async_test = inspect.iscoroutinefunction(pyfuncitem.obj)
+    has_asyncio_marker = pyfuncitem.get_closest_marker("asyncio") is not None
+
+    if not (is_async_test or has_asyncio_marker):
+        return None
+
+    testargs = {
+        arg: pyfuncitem.funcargs[arg]
+        for arg in pyfuncitem._fixtureinfo.argnames
+    }
+    asyncio.run(pyfuncitem.obj(**testargs))
+    return True
 
 
 @pytest.fixture

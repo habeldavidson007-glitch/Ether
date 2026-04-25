@@ -24,7 +24,6 @@ import time
 import hashlib
 import logging
 import asyncio
-import aiohttp
 import requests
 import random
 import signal
@@ -52,6 +51,27 @@ from core.feedback_commands import get_feedback_manager
 from personality import get_composer, Conductor, MeasureLibrary, CompositionalCortex
 
 logger = logging.getLogger(__name__)
+
+
+class BoundedHistory(list):
+    """List-like container that automatically keeps only the newest `maxlen` items."""
+
+    def __init__(self, maxlen: int, *args):
+        super().__init__(*args)
+        self.maxlen = maxlen
+        self._trim()
+
+    def append(self, item):
+        super().append(item)
+        self._trim()
+
+    def extend(self, items):
+        super().extend(items)
+        self._trim()
+
+    def _trim(self):
+        if len(self) > self.maxlen:
+            del self[:-self.maxlen]
 
 
 # ── SELF-HEALING WATCHDOG MECHANISM ────────────────────────────────────────
@@ -426,7 +446,7 @@ class Cortex:
         self.cortex = IntentClassifier()  # Intent classification
         self.safety = SafetyGuard()
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.conversation_history: List[Dict[str, Any]] = []
+        self.conversation_history: List[Dict[str, Any]] = BoundedHistory(maxlen=20)
         
         # Lazy-loaded components
         self._search_engine = None
@@ -564,10 +584,18 @@ class Cortex:
             prefetch_context = prefetch_result.get('content', '')
             used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
-        if not self.is_godot_related(query) and not used_prefetch:
+        # STEP 1: Detect intent using fast regex patterns
+        fast_intent = self._detect_intent_fast(query)
+
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries
+        # Allow simple conversational intents even if not Godot-specific.
+        conversational_fast_paths = {"greeting", "status", "quick_help"}
+        if (
+            not self.is_godot_related(query)
+            and not used_prefetch
+            and fast_intent not in conversational_fast_paths
+        ):
             step("🚫 Off-domain query detected")
-            # Extract topic from query for polite refusal
             stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
             words = query.lower().split()
             topic_words = [w for w in words if w not in stop_words and len(w) > 3]
@@ -575,9 +603,6 @@ class Cortex:
             
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
-        
-        # STEP 2: Detect intent using fast regex patterns
-        fast_intent = self._detect_intent_fast(query)
         
         # STEP 3: Route based on intent
         if fast_intent == 'greeting':
@@ -624,11 +649,13 @@ class Cortex:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # Event loop already running - use create_task
-                    # This happens when called from async context
                     raise RuntimeError("Async context detected - use process_query_async instead")
-            except RuntimeError:
-                raise
+            except RuntimeError as exc:
+                if "no current event loop" in str(exc).lower():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                else:
+                    raise
             
             if complex_intent == 'analyze':
                 result = loop.run_until_complete(self._run_analyze_pipeline(query, context, step))
@@ -682,8 +709,16 @@ class Cortex:
             prefetch_context = prefetch_result.get('content', '')
             used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
-        if not self.is_godot_related(query) and not used_prefetch:
+        # STEP 1: Detect intent using fast regex patterns
+        fast_intent = self._detect_intent_fast(query)
+
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries
+        conversational_fast_paths = {"greeting", "status", "quick_help"}
+        if (
+            not self.is_godot_related(query)
+            and not used_prefetch
+            and fast_intent not in conversational_fast_paths
+        ):
             step("🚫 Off-domain query detected")
             stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
             words = query.lower().split()
@@ -692,9 +727,6 @@ class Cortex:
             
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
-        
-        # STEP 2: Detect intent using fast regex patterns
-        fast_intent = self._detect_intent_fast(query)
         
         # STEP 3: Route based on intent
         if fast_intent == 'greeting':
