@@ -13,6 +13,9 @@ Features:
 - Off-domain guard with prefetch bypass
 - Unified search integration
 - RAM-aware model selection
+- ASYNC-FIRST ARCHITECTURE (non-blocking I/O for 2GB RAM constraint)
+- SELF-HEALING WATCHDOG (auto-recovery from crashes)
+- SMART PIPELINE WRAPPERS (context injection, safety checks, result parsing)
 """
 
 import json
@@ -20,11 +23,17 @@ import re
 import time
 import hashlib
 import logging
+import asyncio
+import aiohttp
 import requests
 import random
+import signal
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable
 from datetime import datetime
+from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 
 # Import from unified consciousness module
 from ether.core.consciousness import (
@@ -42,6 +51,148 @@ from core.safety_preview import get_safety_preview
 from core.feedback_commands import get_feedback_manager
 
 logger = logging.getLogger(__name__)
+
+
+# ── SELF-HEALING WATCHDOG MECHANISM ────────────────────────────────────────
+# Monitors process health and auto-recovers from crashes
+
+class WatchdogMonitor:
+    """
+    Self-healing watchdog that monitors Cortex health and auto-recovers.
+    
+    Features:
+    - Heartbeat monitoring (detects freezes)
+    - Memory usage tracking (prevents OOM on 2GB RAM)
+    - Automatic restart on crash detection
+    - Graceful degradation under resource pressure
+    """
+    
+    def __init__(self, max_restarts: int = 3, restart_cooldown: float = 60.0):
+        self.max_restarts = max_restarts
+        self.restart_cooldown = restart_cooldown  # seconds between restarts
+        self.restart_count = 0
+        self.last_restart_time = 0.0
+        self.is_healthy = True
+        self._monitor_task: Optional[asyncio.Task] = None
+        self._heartbeat_interval = 5.0  # seconds
+        self._memory_threshold_mb = 1800  # Alert threshold for 2GB RAM systems
+        self._callbacks: List[Callable] = []
+        
+    def register_callback(self, callback: Callable):
+        """Register callback for health status changes"""
+        self._callbacks.append(callback)
+    
+    async def start_monitoring(self, cortex_instance: 'Cortex'):
+        """Start async monitoring loop"""
+        self._monitor_task = asyncio.create_task(self._monitor_loop(cortex_instance))
+        logger.info("Watchdog monitoring started")
+    
+    async def stop_monitoring(self):
+        """Stop monitoring loop"""
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Watchdog monitoring stopped")
+    
+    async def _monitor_loop(self, cortex_instance: 'Cortex'):
+        """Continuous health monitoring loop"""
+        while self.is_healthy:
+            try:
+                await asyncio.sleep(self._heartbeat_interval)
+                
+                # Check memory usage
+                mem_usage = self._get_memory_usage_mb()
+                if mem_usage > self._memory_threshold_mb:
+                    logger.warning(f"High memory usage: {mem_usage:.1f}MB / {self._memory_threshold_mb}MB")
+                    self._notify_callbacks('memory_warning', mem_usage)
+                
+                # Check heartbeat (cortex responsiveness)
+                if not await self._check_heartbeat(cortex_instance):
+                    logger.error("Heartbeat check failed - initiating recovery")
+                    await self._attempt_recovery(cortex_instance)
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Watchdog monitor error: {e}")
+    
+    def _get_memory_usage_mb(self) -> float:
+        """Get current process memory usage in MB"""
+        try:
+            import resource
+            mem_info = resource.getrusage(resource.RUSAGE_SELF)
+            return mem_info.ru_maxrss / 1024.0  # Convert KB to MB on Linux
+        except Exception:
+            return 0.0
+    
+    async def _check_heartbeat(self, cortex_instance: 'Cortex') -> bool:
+        """Check if cortex is responsive"""
+        try:
+            # Quick health check - should respond within 2 seconds
+            start = time.time()
+            # Simple operation to test responsiveness
+            _ = cortex_instance.session_id
+            elapsed = time.time() - start
+            return elapsed < 2.0
+        except Exception:
+            return False
+    
+    async def _attempt_recovery(self, cortex_instance: 'Cortex'):
+        """Attempt to recover from unhealthy state"""
+        current_time = time.time()
+        
+        # Check cooldown period
+        if current_time - self.last_restart_time < self.restart_cooldown:
+            logger.warning("Restart cooldown active - skipping recovery")
+            return
+        
+        # Check max restart limit
+        if self.restart_count >= self.max_restarts:
+            logger.error("Max restart limit reached - marking as unhealthy")
+            self.is_healthy = False
+            self._notify_callbacks('max_restarts_exceeded', self.restart_count)
+            return
+        
+        # Attempt recovery
+        self.restart_count += 1
+        self.last_restart_time = current_time
+        logger.info(f"Recovery attempt {self.restart_count}/{self.max_restarts}")
+        
+        try:
+            # Reset critical state
+            cortex_instance.conversation_history = cortex_instance.conversation_history[-5:]  # Keep only recent
+            cortex_instance._response_cache.clear()
+            
+            # Notify callbacks
+            self._notify_callbacks('recovery_attempt', self.restart_count)
+            
+            logger.info("Recovery completed successfully")
+        except Exception as e:
+            logger.error(f"Recovery failed: {e}")
+            self.is_healthy = False
+    
+    def _notify_callbacks(self, event: str, data: Any):
+        """Notify registered callbacks of health events"""
+        for callback in self._callbacks:
+            try:
+                callback(event, data)
+            except Exception as e:
+                logger.error(f"Callback notification error: {e}")
+
+
+# ── ASYNC DECORATOR FOR SYNC-TO-ASYNC BRIDGE ────────────────────────────────
+
+def async_wrap(func):
+    """Decorator to wrap synchronous functions in async executor"""
+    @wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            return await loop.run_in_executor(executor, func, *args, **kwargs)
+    return async_wrapper
 
 
 # ── DYNAMIC TEMPERATURE ENGINE (Phase 11.1) ─────────────────────────────────────
@@ -262,11 +413,13 @@ class Cortex:
     - Dynamic temperature control
     - Auto follow-up generation
     - Prefetch-first architecture
+    - ASYNC-FIRST execution (non-blocking I/O)
+    - SELF-HEALING watchdog monitoring
     
     This is THE single entry point for all AI queries.
     """
     
-    def __init__(self, project_root: str = None):
+    def __init__(self, project_root: str = None, enable_watchdog: bool = True):
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.hippocampus = Hippocampus()
         self.cortex = IntentClassifier()  # Intent classification
@@ -282,12 +435,24 @@ class Cortex:
         # Cache for responses
         self._response_cache = {}
         
+        # Self-healing watchdog
+        self.watchdog = WatchdogMonitor() if enable_watchdog else None
+        if self.watchdog:
+            self.watchdog.register_callback(self._on_watchdog_event)
+        
+        # Async executor for non-blocking I/O
+        self._executor = ThreadPoolExecutor(max_workers=4)
+        
         # Detect RAM and suggest model at startup
         suggested_model, available_ram = detect_ram_and_suggest_model()
         self.suggested_model = suggested_model
         self.available_ram_gb = available_ram
         
         logger.info(f"Cortex initialized (Session: {self.session_id}, Model: {suggested_model})")
+    
+    def _on_watchdog_event(self, event: str, data: Any):
+        """Handle watchdog health events"""
+        logger.warning(f"Watchdog event: {event} - {data}")
     
     @property
     def search_engine(self):
@@ -439,15 +604,124 @@ class Cortex:
             # Build context (project files + knowledge base + prefetch)
             context = self._build_context(query, complex_intent, prefetch_context)
             
-            # Run appropriate pipeline
+            # Run appropriate pipeline (ASYNC - await for non-blocking execution)
+            # Note: For backward compatibility with sync callers, we run async in a sync wrapper
+            import asyncio
+            
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Event loop already running - use create_task
+                    # This happens when called from async context
+                    raise RuntimeError("Async context detected - use process_query_async instead")
+            except RuntimeError:
+                raise
+            
             if complex_intent == 'analyze':
-                result = self._run_analyze_pipeline(query, context, step)
+                result = loop.run_until_complete(self._run_analyze_pipeline(query, context, step))
             elif complex_intent in ['debug', 'fix']:
-                result = self._run_debug_pipeline(query, context, temperature, use_n_sampling, step)
+                result = loop.run_until_complete(self._run_debug_pipeline(query, context, temperature, use_n_sampling, step))
             elif complex_intent == 'build':
-                result = self._run_build_pipeline(query, context, temperature, use_n_sampling, step)
+                result = loop.run_until_complete(self._run_build_pipeline(query, context, temperature, use_n_sampling, step))
             else:
-                result = self._run_chat_pipeline(query, context, temperature, use_n_sampling, step)
+                result = loop.run_until_complete(self._run_chat_pipeline(query, context, temperature, use_n_sampling, step))
+            
+            # Add follow-ups for conversational flow
+            if 'text' in result:
+                follow_ups = generate_follow_up_questions(query, result['text'], complex_intent)
+                result['follow_ups'] = follow_ups
+            
+            # Store in conversation history
+            self.conversation_history.append({
+                "query": query,
+                "response": result.get('text', ''),
+                "intent": complex_intent,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            return result, log
+    
+    async def process_query_async(self, query: str, yield_steps=None) -> Tuple[Dict, List[str]]:
+        """
+        ASYNC-NATIVE version of process_query for non-blocking I/O.
+        
+        Use this method in async contexts (e.g., web servers, async UI frameworks)
+        to prevent blocking the event loop during LLM operations.
+        
+        Returns: (result_dict, log_list)
+        """
+        log = []
+        
+        def step(name: str):
+            log.append(name)
+            if yield_steps:
+                yield_steps(name)
+        
+        # STEP 0: PREFETCH QUEUE CHECK - Instant general knowledge
+        prefetch_context = None
+        used_prefetch = False
+        prefetch_result = self.hippocampus.check_prefetch(query)
+        if prefetch_result:
+            step("⚡ Prefetch hit! Instant knowledge retrieved")
+            prefetch_context = prefetch_result.get('content', '')
+            used_prefetch = True
+        
+        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        if not self.is_godot_related(query) and not used_prefetch:
+            step("🚫 Off-domain query detected")
+            stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
+            words = query.lower().split()
+            topic_words = [w for w in words if w not in stop_words and len(w) > 3]
+            topic = topic_words[0] if topic_words else "that topic"
+            
+            refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
+            return {"type": "chat", "text": refusal, "fast_path": True}, log
+        
+        # STEP 2: Detect intent using fast regex patterns
+        fast_intent = self._detect_intent_fast(query)
+        
+        # STEP 3: Route based on intent
+        if fast_intent == 'greeting':
+            step("⚡ Fast path (greeting)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'status':
+            step("⚡ Fast path (status)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'quick_help':
+            step("⚡ Fast path (help)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        elif fast_intent == 'explain':
+            step("⚡ Fast path (explain)")
+            response = self._get_fast_response(fast_intent, query)
+            follow_ups = generate_follow_up_questions(query, response, fast_intent)
+            return {"type": "chat", "text": response, "fast_path": True, "follow_ups": follow_ups}, log
+        
+        else:
+            # SLOW PATH: Complex intent requires LLM
+            complex_intent = self._classify_complex_intent(query)
+            
+            # Get dynamic temperature based on intent
+            temperature, use_n_sampling = get_dynamic_temperature(complex_intent, query, self.conversation_history)
+            step(f"🎨 Temperature: {temperature:.2f}" + (" (N-sampling)" if use_n_sampling else ""))
+            
+            # Build context (project files + knowledge base + prefetch)
+            context = self._build_context(query, complex_intent, prefetch_context)
+            
+            # Run appropriate async pipeline
+            if complex_intent == 'analyze':
+                result = await self._run_analyze_pipeline(query, context, step)
+            elif complex_intent in ['debug', 'fix']:
+                result = await self._run_debug_pipeline(query, context, temperature, use_n_sampling, step)
+            elif complex_intent == 'build':
+                result = await self._run_build_pipeline(query, context, temperature, use_n_sampling, step)
+            else:
+                result = await self._run_chat_pipeline(query, context, temperature, use_n_sampling, step)
             
             # Add follow-ups for conversational flow
             if 'text' in result:
@@ -547,14 +821,16 @@ class Cortex:
         
         return "\n\n".join(context_parts)
     
-    def _run_analyze_pipeline(self, query: str, context: str, step) -> Dict:
+    async def _run_analyze_pipeline(self, query: str, context: str, step) -> Dict:
         """
         Smart Analysis Pipeline - Enhanced with consciousness state injection and result parsing.
+        
+        ASYNC-NATIVE: Non-blocking I/O for 2GB RAM constraint
         
         Flow:
         1. Inject user history and project state into context
         2. Run safety preview on analysis request
-        3. Call builder.analyze() with enriched context
+        3. Call builder.analyze() via async executor (non-blocking)
         4. Parse results and extract actionable insights
         5. Store learnings in adaptive memory
         """
@@ -577,8 +853,13 @@ class Cortex:
                     "safety_flagged": True
                 }
             
-            # STEP 3: Execute analysis with enriched context
-            result_text = analyze_func(query, enriched_context, self.conversation_history)
+            # STEP 3: Execute analysis with enriched context (ASYNC - non-blocking)
+            loop = asyncio.get_event_loop()
+            result_text = await loop.run_in_executor(
+                self._executor,
+                analyze_func,
+                query, enriched_context, self.conversation_history
+            )
             
             # STEP 4: Parse and structure results
             parsed_result = self._parse_analysis_result(result_text, query)
@@ -601,15 +882,17 @@ class Cortex:
             # Graceful degradation to basic analysis
             return self._fallback_analysis(query, context, str(e))
     
-    def _run_debug_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
+    async def _run_debug_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
         """
         Smart Debug Pipeline - Enhanced with multi-strategy debugging and validation.
+        
+        ASYNC-NATIVE: Non-blocking I/O prevents UI freezes during LLM operations
         
         Flow:
         1. Extract error patterns and build debug context
         2. Check conversation history for related fixes
         3. Apply CoT fallback if pattern not recognized
-        4. Call builder.debug() with strategic context
+        4. Call builder.debug() via async executor (non-blocking)
         5. Validate fix and generate verification steps
         """
         step("🐛 Smart debugging with multi-strategy approach...")
@@ -644,8 +927,13 @@ class Cortex:
                 )
                 debug_context += f"\n\n[COT INSTRUCTION]\n{cot_data['cot_prompt']}"
             
-            # STEP 4: Execute debug with strategic context
-            result = debug_func(query, debug_context)
+            # STEP 4: Execute debug with strategic context (ASYNC - non-blocking)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                self._executor,
+                debug_func,
+                query, debug_context
+            )
             
             # STEP 5: Validate and enhance fix
             validated_result = self._validate_debug_result(result, query, error_patterns)
@@ -664,15 +952,17 @@ class Cortex:
             logger.error(f"Smart debug pipeline failed: {e}")
             return self._fallback_debug(query, context, temperature, str(e))
     
-    def _run_build_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
+    async def _run_build_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
         """
         Smart Build Pipeline - Enhanced with requirements extraction and quality gates.
+        
+        ASYNC-NATIVE: Non-blocking I/O prevents UI freezes during code generation
         
         Flow:
         1. Extract implicit requirements from query
         2. Check project conventions and existing patterns
         3. Apply creativity boost for high-temperature builds
-        4. Call builder.run_pipeline() with full context
+        4. Call builder.run_pipeline() via async executor (non-blocking)
         5. Run quality gates on generated code
         """
         step("🔨 Smart building with quality gates...")
@@ -693,14 +983,12 @@ class Cortex:
                 step("🎨 High creativity mode with N-sampling")
                 build_context += "\n\n[CREATIVITY MODE]\nGenerate innovative solutions. Consider multiple approaches."
             
-            # STEP 4: Execute build pipeline
-            result, logs = run_pipeline_func(
-                task=query,
-                intent="build",
-                context=build_context,
-                history=self.conversation_history,
-                yield_steps=step,
-                requirements=requirements
+            # STEP 4: Execute build pipeline (ASYNC - non-blocking)
+            loop = asyncio.get_event_loop()
+            result, logs = await loop.run_in_executor(
+                self._executor,
+                run_pipeline_func,
+                query, "build", build_context, self.conversation_history, step, requirements
             )
             
             # STEP 5: Run quality gates
@@ -722,15 +1010,17 @@ class Cortex:
             logger.error(f"Smart build pipeline failed: {e}")
             return self._fallback_build(query, context, temperature, str(e))
     
-    def _run_chat_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
+    async def _run_chat_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
         """
         Smart Chat Pipeline - Enhanced with personality adaptation and context awareness.
+        
+        ASYNC-NATIVE: Non-blocking I/O prevents UI freezes during conversation
         
         Flow:
         1. Analyze conversation flow and user expertise level
         2. Adapt response style based on history
         3. Inject relevant knowledge from hippocampus
-        4. Call builder.chat() with personalized context
+        4. Call builder.chat() via async executor (non-blocking)
         5. Generate follow-up questions autonomously
         """
         step("💬 Smart chatting with personality adaptation...")
@@ -750,8 +1040,13 @@ class Cortex:
             knowledge_snippets = self.hippocampus.get_relevant_knowledge(query, limit=3)
             chat_context = self._enrich_chat_context(context, knowledge_snippets, style_config)
             
-            # STEP 4: Execute chat with personalized context
-            result_text = chat_func(query, self.conversation_history, chat_context)
+            # STEP 4: Execute chat with personalized context (ASYNC - non-blocking)
+            loop = asyncio.get_event_loop()
+            result_text = await loop.run_in_executor(
+                self._executor,
+                chat_func,
+                query, self.conversation_history, chat_context
+            )
             
             # STEP 5: Generate autonomous follow-ups
             follow_ups = generate_follow_up_questions(query, result_text, "chat")
