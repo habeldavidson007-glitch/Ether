@@ -3,11 +3,24 @@ Test configuration and fixtures for Ether test suite.
 """
 import pytest
 import sys
+import asyncio
 from pathlib import Path
 
 # Add the workspace root to the path so we can import ether modules
 ROOT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT_DIR))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    """
+    Minimal async test runner fallback when pytest-asyncio plugin is not present.
+    """
+    test_func = pyfuncitem.obj
+    if asyncio.iscoroutinefunction(test_func):
+        asyncio.run(test_func(**pyfuncitem.funcargs))
+        return True
+    return None
 
 
 @pytest.fixture

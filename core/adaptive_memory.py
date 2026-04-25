@@ -24,8 +24,7 @@ from collections import defaultdict
 from datetime import datetime
 import gc
 import numpy as np
-import zstandard as zstd
-ZSTD_AVAILABLE = True
+import zlib
 
 class FeedbackEntry:
     def __init__(self, entry_id: str, query: str, original_code: str, 
@@ -112,14 +111,6 @@ class AdaptiveMemory:
         self.auto_cleanup_interval = auto_cleanup_interval
         self._operation_count = 0
         
-        # Compression setup
-        if ZSTD_AVAILABLE:
-            self.compressor = zstd.ZstdCompressor(level=3)  # Fast compression
-            self.decompressor = zstd.ZstdDecompressor()
-        else:
-            self.compressor = None
-            self.decompressor = None
-        
         self._load_data()
         
     def _load_data(self):
@@ -178,14 +169,10 @@ class AdaptiveMemory:
         text_bytes = text.encode('utf-8')
         arr = np.frombuffer(text_bytes, dtype=np.uint8)
         
-        if ZSTD_AVAILABLE and self.compressor:
-            # Compress the array data
-            compressed = self.compressor.compress(arr.tobytes())
-        else:
-            compressed = arr.tobytes()
+        compressed = zlib.compress(arr.tobytes(), level=3)
         
         # Save to disk
-        filename = f"{key}.npy.zst" if ZSTD_AVAILABLE else f"{key}.npy"
+        filename = f"{key}.npy.zlib"
         filepath = self.vector_store_dir / filename
         
         # Store metadata + compressed data in one file
@@ -227,11 +214,7 @@ class AdaptiveMemory:
             # Read compressed data
             compressed = f.read()
         
-        if ZSTD_AVAILABLE and self.decompressor:
-            # Decompress
-            decompressed_bytes = self.decompressor.decompress(compressed)
-        else:
-            decompressed_bytes = compressed
+        decompressed_bytes = zlib.decompress(compressed)
         
         # Convert back to text
         arr = np.frombuffer(decompressed_bytes, dtype=np.uint8)

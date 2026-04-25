@@ -1,4 +1,15 @@
-# DEPRECATED: See pyproject.toml for dependencies.
+# Compatibility requirements for environments that still install from
+# requirements.txt (CI containers, quick local setup).
+# Source of truth remains pyproject.toml.
 
 streamlit>=1.35,<1.45
 requests>=2.31
+numpy>=1.24
+pandas>=2.0
+tqdm>=4.66
+watchdog>=3.0
+zstandard>=0.25
+
+# Test extras commonly needed for this repository's suite
+pytest>=7.4
+pytest-asyncio>=0.23
