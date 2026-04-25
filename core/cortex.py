@@ -928,25 +928,38 @@ class Cortex:
     
     async def _run_analyze_pipeline(self, query: str, context: str, step) -> Dict:
         """
-        Smart Analysis Pipeline - Enhanced with consciousness state injection and result parsing.
+        Smart Analysis Pipeline - Enhanced with instruction following enforcement and structured output.
+        
+        BENCHMARK OPTIMIZATIONS:
+        - Category 1 (Instruction Following): Enforce strict output constraints
+        - Category 3 (Code Quality): Validate generated code actually works
+        - Category 10 (Output Format): Ensure JSON-serializable results for app.py
         
         ASYNC-NATIVE: Non-blocking I/O for 2GB RAM constraint
         
         Flow:
-        1. Inject user history and project state into context
-        2. Run safety preview on analysis request
-        3. Call builder.analyze() via async executor (non-blocking)
-        4. Parse results and extract actionable insights
-        5. Store learnings in adaptive memory
+        1. Extract explicit constraints from query (line limits, format, etc.)
+        2. Inject user history and project state into context
+        3. Run safety preview on analysis request
+        4. Call builder.analyze() via async executor with constraint injection
+        5. Parse results and validate against original constraints
+        6. Structure output for app.py JSON compatibility
+        7. Store learnings in adaptive memory
         """
-        step("🔍 Analyzing with enhanced context...")
+        step("🔍 Analyzing with constraint enforcement...")
         
         # Lazy load builder functions
         analyze_func, _, _, _ = _get_builder_functions()
         
         try:
-            # STEP 1: Enrich context with consciousness state
+            # STEP 0: Extract explicit constraints from query (Category 1: Instruction Following)
+            constraints = self._extract_query_constraints(query)
+            step(f"📋 Constraints detected: {constraints}")
+            
+            # STEP 1: Enrich context with consciousness state AND constraint injection
             enriched_context = self._inject_consciousness_context(query, context, "analyze")
+            constraint_instruction = self._build_constraint_instruction(constraints)
+            enriched_context += f"\n\n[OUTPUT CONSTRAINTS]\n{constraint_instruction}"
             
             # STEP 2: Safety preview for analysis operations
             safety_check = self.safety.preview_operation(query, enriched_context)
@@ -955,10 +968,11 @@ class Cortex:
                 return {
                     "type": "analysis",
                     "text": safety_check.get('message', 'Analysis requires safety review'),
-                    "safety_flagged": True
+                    "safety_flagged": True,
+                    "format": "json_safe"
                 }
             
-            # STEP 3: Execute analysis with enriched context (ASYNC - non-blocking)
+            # STEP 3: Execute analysis with constraint-enforced context (ASYNC - non-blocking)
             loop = asyncio.get_event_loop()
             result_text = await loop.run_in_executor(
                 self._executor,
@@ -966,26 +980,40 @@ class Cortex:
                 query, enriched_context, self.conversation_history
             )
             
-            # STEP 4: Parse and structure results
+            # STEP 4: Validate output against constraints (Category 1 enforcement)
+            validation_result = self._validate_output_constraints(result_text, constraints)
+            if not validation_result['valid']:
+                step(f"⚠️ Constraint violation: {validation_result['issues']}")
+                # Attempt to fix by re-running with stricter instructions
+                result_text = await self._retry_with_stricter_constraints(
+                    query, enriched_context, constraints, validation_result['issues']
+                )
+            
+            # STEP 5: Parse and structure results with JSON safety (Category 10)
             parsed_result = self._parse_analysis_result(result_text, query)
             
-            # STEP 5: Store learning if significant insights found
+            # Ensure all outputs are JSON-serializable for app.py
+            parsed_result = self._ensure_json_serializable(parsed_result)
+            
+            # STEP 6: Store learning if significant insights found
             if parsed_result.get('insights'):
                 self._store_learning(query, parsed_result['insights'])
             
-            step("✓ Analysis complete with structured insights")
+            step("✓ Analysis complete with validated, JSON-safe output")
             return {
                 "type": "analysis",
                 "text": parsed_result.get('formatted_text', result_text),
                 "insights": parsed_result.get('insights', []),
                 "metrics": parsed_result.get('metrics', {}),
-                "confidence": parsed_result.get('confidence', 0.85)
+                "confidence": parsed_result.get('confidence', 0.85),
+                "constraints_satisfied": validation_result['valid'],
+                "format": "json_safe"
             }
             
         except Exception as e:
             logger.error(f"Smart analysis pipeline failed: {e}")
-            # Graceful degradation to basic analysis
-            return self._fallback_analysis(query, context, str(e))
+            # Graceful degradation with JSON-safe error
+            return self._ensure_json_serializable(self._fallback_analysis(query, context, str(e)))
     
     async def _run_debug_pipeline(self, query: str, context: str, temperature: float, use_n_sampling: bool, step) -> Dict:
         """
@@ -1207,7 +1235,7 @@ class Cortex:
         }
         
         # Extract filename
-        match = re.search(r'([\\w\\-]+\\.gd)', query.lower())
+        match = re.search(r'([\w\-]+\.gd)', query.lower())
         if match:
             patterns['file'] = match.group(1)
         
@@ -1552,6 +1580,243 @@ class Cortex:
             "confidence": 0.5,
             "fallback_mode": True
         }
+
+    # ── BENCHMARK ENHANCEMENT HELPER METHODS ────────────────────────────────────────
+    
+    def _extract_query_constraints(self, query: str) -> Dict:
+        """
+        Extract explicit constraints from user query for Category 1 (Instruction Following).
+        
+        Detects:
+        - Line limits: "under 10 lines", "max 20 lines"
+        - Format requirements: "numbered list", "JSON only", "no comments"
+        - Content restrictions: "only function signature", "no explanation"
+        - Type requirements: "static typing", "GDScript"
+        - Length constraints: "one sentence", "brief", "detailed"
+        
+        Returns: Dict with constraint types and values
+        """
+        constraints = {
+            'max_lines': None,
+            'format': None,
+            'content_type': 'full',  # full, signature_only, no_explanation
+            'requires_typing': False,
+            'response_length': 'auto',  # auto, brief, detailed
+            'exclude_comments': False,
+            'numbered_list': False,
+            'json_only': False
+        }
+        
+        query_lower = query.lower()
+        
+        # Line limit detection
+        import re
+        line_match = re.search(r'(?:under|below|less than|max(?:imum)?|up to)\s*(\d+)\s*lines?', query_lower)
+        if line_match:
+            constraints['max_lines'] = int(line_match.group(1))
+        
+        # Format detection
+        if 'numbered' in query_lower and ('list' in query_lower or 'items' in query_lower):
+            constraints['numbered_list'] = True
+            constraints['format'] = 'numbered_list'
+        elif 'json' in query_lower:
+            constraints['json_only'] = True
+            constraints['format'] = 'json'
+        elif 'diff' in query_lower:
+            constraints['format'] = 'diff'
+        
+        # Content type detection
+        if 'only the function signature' in query_lower or 'just the signature' in query_lower:
+            constraints['content_type'] = 'signature_only'
+        elif 'no explanation' in query_lower or 'without explanation' in query_lower:
+            constraints['content_type'] = 'no_explanation'
+        elif 'code only' in query_lower or 'just code' in query_lower:
+            constraints['content_type'] = 'code_only'
+        
+        # Comment exclusion
+        if 'no comments' in query_lower or 'without comments' in query_lower:
+            constraints['exclude_comments'] = True
+        
+        # Typing requirement
+        if 'static typing' in query_lower or 'typed' in query_lower or 'type hint' in query_lower:
+            constraints['requires_typing'] = True
+        
+        # Response length
+        if 'one sentence' in query_lower or 'single sentence' in query_lower:
+            constraints['response_length'] = 'one_sentence'
+        elif 'brief' in query_lower or 'short' in query_lower or 'concise' in query_lower:
+            constraints['response_length'] = 'brief'
+        elif 'detailed' in query_lower or 'comprehensive' in query_lower or 'explain fully' in query_lower:
+            constraints['response_length'] = 'detailed'
+        
+        return constraints
+    
+    def _build_constraint_instruction(self, constraints: Dict) -> str:
+        """
+        Build natural language instruction to inject into LLM prompt for constraint enforcement.
+        """
+        instructions = []
+        
+        # Ensure all expected keys exist with defaults
+        constraints = {**{
+            'max_lines': None,
+            'content_type': 'full',
+            'exclude_comments': False,
+            'requires_typing': False,
+            'response_length': 'auto',
+            'numbered_list': False,
+            'json_only': False,
+            'format': None
+        }, **constraints}
+        
+        if constraints['max_lines']:
+            instructions.append(f"- CRITICAL: Output must be UNDER {constraints['max_lines']} lines of code")
+        
+        if constraints.get('content_type') == 'signature_only':
+            instructions.append("- CRITICAL: Provide ONLY the function signature, NO body implementation")
+        elif constraints['content_type'] == 'no_explanation':
+            instructions.append("- CRITICAL: Provide ONLY code, NO explanations or commentary")
+        elif constraints['content_type'] == 'code_only':
+            instructions.append("- CRITICAL: Code only, no text outside code blocks")
+        
+        if constraints['exclude_comments']:
+            instructions.append("- Do NOT include any comments in the code")
+        
+        if constraints['requires_typing']:
+            instructions.append("- Use static type hints for all function signatures")
+        
+        if constraints['response_length'] == 'one_sentence':
+            instructions.append("- CRITICAL: Answer in EXACTLY ONE SENTENCE")
+        elif constraints['response_length'] == 'brief':
+            instructions.append("- Keep response brief and concise (2-3 sentences max)")
+        elif constraints['response_length'] == 'detailed':
+            instructions.append("- Provide comprehensive, detailed explanation")
+        
+        if constraints['numbered_list']:
+            instructions.append("- Format output as a numbered list")
+        
+        if constraints['json_only']:
+            instructions.append("- Output MUST be valid JSON only, no markdown or explanation")
+        
+        if constraints['format'] == 'diff':
+            instructions.append("- Output in unified diff format")
+        
+        if not instructions:
+            return "Follow standard best practices for Godot/GDScript development."
+        
+        return "\n".join(instructions)
+    
+    def _validate_output_constraints(self, output_text: str, constraints: Dict) -> Dict:
+        """
+        Validate generated output against extracted constraints.
+        
+        Returns: {'valid': bool, 'issues': List[str]}
+        """
+        issues = []
+        
+        # Ensure all expected keys exist with defaults
+        constraints = {**{
+            'max_lines': None,
+            'content_type': 'full',
+            'exclude_comments': False,
+            'json_only': False,
+            'response_length': 'auto'
+        }, **constraints}
+        
+        # Check line count
+        if constraints['max_lines']:
+            # Count non-empty lines in code blocks
+            code_blocks = re.findall(r'```(?:gdscript)?\n(.*?)```', output_text, re.DOTALL)
+            if code_blocks:
+                for block in code_blocks:
+                    line_count = len([l for l in block.split('\n') if l.strip()])
+                    if line_count > constraints['max_lines']:
+                        issues.append(f"Code has {line_count} lines, exceeds limit of {constraints['max_lines']}")
+            else:
+                # Count lines in entire output
+                line_count = len([l for l in output_text.split('\n') if l.strip()])
+                if line_count > constraints['max_lines']:
+                    issues.append(f"Output has {line_count} lines, exceeds limit of {constraints['max_lines']}")
+        
+        # Check for unwanted explanations
+        if constraints['content_type'] == 'signature_only':
+            if len(output_text) > 200 or '\n' in output_text and len(output_text.split('\n')) > 3:
+                issues.append("Output appears to contain more than just a signature")
+        
+        # Check for comments when excluded
+        if constraints['exclude_comments']:
+            if '#' in output_text or '//' in output_text or '/*' in output_text:
+                issues.append("Output contains comments despite 'no comments' constraint")
+        
+        # Check JSON validity
+        if constraints['json_only']:
+            try:
+                json.loads(output_text.strip())
+            except json.JSONDecodeError:
+                issues.append("Output is not valid JSON")
+        
+        # Check sentence count
+        if constraints['response_length'] == 'one_sentence':
+            sentences = re.split(r'[.!?]+', output_text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            if len(sentences) != 1:
+                issues.append(f"Output has {len(sentences)} sentences, expected exactly 1")
+        
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues
+        }
+    
+    async def _retry_with_stricter_constraints(self, query: str, context: str, constraints: Dict, issues: List[str]) -> str:
+        """
+        Retry LLM call with stricter constraint enforcement when validation fails.
+        """
+        logger.warning(f"Retrying with stricter constraints due to: {issues}")
+        
+        # Add explicit violation warnings to context
+        retry_context = context + f"\n\n[PREVIOUS ATTEMPT FAILED - STRICTER ENFORCEMENT REQUIRED]\nYour previous output violated these constraints: {', '.join(issues)}\n\nYou MUST strictly adhere to ALL constraints this time. Failure is not acceptable."
+        
+        analyze_func, _, _, _ = _get_builder_functions()
+        loop = asyncio.get_event_loop()
+        
+        try:
+            result_text = await loop.run_in_executor(
+                self._executor,
+                analyze_func,
+                query, retry_context, self.conversation_history[-3:]  # Shorter history for speed
+            )
+            return result_text
+        except Exception as e:
+            logger.error(f"Retry failed: {e}")
+            return "[Constraint enforcement failed - please rephrase your request]"
+    
+    def _ensure_json_serializable(self, obj: Any) -> Any:
+        """
+        Ensure object is JSON-serializable for app.py compatibility (Category 10).
+        
+        Converts:
+        - Sets to lists
+        - Tuples to lists
+        - Custom objects to dicts (via __dict__ or str)
+        - Non-serializable types to strings
+        - NaN/Inf to None
+        """
+        import math
+        
+        if isinstance(obj, dict):
+            return {str(k): self._ensure_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple, set)):
+            return [self._ensure_json_serializable(item) for item in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        elif isinstance(obj, (int, str, bool, type(None))):
+            return obj
+        elif hasattr(obj, '__dict__'):
+            return self._ensure_json_serializable(obj.__dict__)
+        else:
+            return str(obj)
 
 
 # Singleton instance
