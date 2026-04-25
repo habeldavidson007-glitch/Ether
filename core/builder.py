@@ -647,32 +647,17 @@ def is_godot_related(query: str) -> bool:
 
 
 def detect_intent_fast(query: str) -> str:
-    """
-    Fast path intent detection - DEPRECATED.
-    
-    This function now delegates to the unified classify_intent() from ml_intent.py.
-    Kept for backward compatibility but should be replaced with direct imports.
-    
-    Usage:
-        from ether.core.ml_intent import classify_intent
-        intent = classify_intent(query)
-    """
-    # Import here to avoid circular dependency
-    try:
-        from ether.core.ml_intent import classify_intent as unified_classify
-        return unified_classify(query)
-    except ImportError:
-        # Fallback to old logic if unified module not available
-        q = query.strip()
-        for p in _GREETING_RE:
-            if p.match(q): return 'greeting'
-        for p in _STATUS_RE:
-            if p.search(q): return 'status'
-        for p in _QUICK_HELP_RE:
-            if p.match(q) or p.search(q): return 'quick_help'
-        for p in _EXPLAIN_RE:
-            if p.search(q) and len(q) < 60: return 'explain'
-        return 'complex'
+    """Regex-based fast intent. No LLM. Enhanced from v1.8."""
+    q = query.strip()
+    for p in _GREETING_RE:
+        if p.match(q): return 'greeting'
+    for p in _STATUS_RE:
+        if p.search(q): return 'status'
+    for p in _QUICK_HELP_RE:
+        if p.match(q) or p.search(q): return 'quick_help'
+    for p in _EXPLAIN_RE:
+        if p.search(q) and len(q) < 60: return 'explain'
+    return 'complex'
 
 
 def get_fast_response(intent: str, query: str, project_stats: Dict = None) -> str:

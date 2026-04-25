@@ -24,8 +24,12 @@ from collections import defaultdict
 from datetime import datetime
 import gc
 import numpy as np
-import zstandard as zstd
-ZSTD_AVAILABLE = True
+try:
+    import zstandard as zstd
+    ZSTD_AVAILABLE = True
+except ImportError:
+    ZSTD_AVAILABLE = False
+    print("[AdaptiveMemory] Warning: zstandard not installed. Compression disabled.")
 
 class FeedbackEntry:
     def __init__(self, entry_id: str, query: str, original_code: str, 
