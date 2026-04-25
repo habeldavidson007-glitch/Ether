@@ -35,14 +35,16 @@ from datetime import datetime
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 
-# Import from unified consciousness module
+# Import from unified consciousness module - only stubs that don't conflict
 from ether.core.consciousness import (
     Hippocampus, 
-    Cortex as IntentClassifier, 
     SafetyGuard,
     detect_ram_and_suggest_model,
     ML_AVAILABLE
 )
+
+# Use local Cortex class for intent classification (avoid circular import)
+IntentClassifier = None  # Will use self-referential pattern in Cortex class
 
 # Import supporting modules
 from core.unified_search import get_unified_search
@@ -423,10 +425,12 @@ class Cortex:
     def __init__(self, project_root: str = None, enable_watchdog: bool = True, enable_composer: bool = False):
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.hippocampus = Hippocampus()
-        self.cortex = IntentClassifier()  # Intent classification
+        # Self-reference for intent classification (avoid circular import)
+        self.cortex = self  # Use self for intent classification
         self.safety = SafetyGuard()
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.conversation_history: List[Dict[str, Any]] = []
+        self._conversation_history: List[Dict[str, Any]] = []
+        self._history_max_length = 20
         
         # Lazy-loaded components
         self._search_engine = None
@@ -466,6 +470,27 @@ class Cortex:
     def _on_watchdog_event(self, event: str, data: Any):
         """Handle watchdog health events"""
         logger.warning(f"Watchdog event: {event} - {data}")
+    
+    @property
+    def conversation_history(self) -> List[Dict[str, Any]]:
+        """Get conversation history (bounded to max_length entries)"""
+        # Return the internal list directly - bounding is handled by _add_to_conversation_history
+        # and the setter. For direct appends, we enforce the bound after access.
+        if len(self._conversation_history) > self._history_max_length:
+            self._conversation_history = self._conversation_history[-self._history_max_length:]
+        return self._conversation_history
+    
+    @conversation_history.setter
+    def conversation_history(self, value: List[Dict[str, Any]]):
+        """Set conversation history with automatic bounding"""
+        self._conversation_history = value[-self._history_max_length:] if len(value) > self._history_max_length else value
+    
+    def _add_to_conversation_history(self, entry: Dict[str, Any]):
+        """Add entry to conversation history with automatic bounding"""
+        self._conversation_history.append(entry)
+        # Enforce hard limit
+        if len(self._conversation_history) > self._history_max_length:
+            self._conversation_history = self._conversation_history[-self._history_max_length:]
     
     @property
     def search_engine(self):
@@ -564,7 +589,17 @@ class Cortex:
             prefetch_context = prefetch_result.get('content', '')
             used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # STEP 1: Detect intent using fast regex patterns (check greetings FIRST - they're domain-agnostic)
+        fast_intent = self._detect_intent_fast(query)
+        
+        # Handle greetings immediately (domain-agnostic)
+        if fast_intent == 'greeting':
+            step("⚡ Fast path (greeting)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # Note: This check comes AFTER greeting detection to allow friendly hellos
         if not self.is_godot_related(query) and not used_prefetch:
             step("🚫 Off-domain query detected")
             # Extract topic from query for polite refusal
@@ -576,33 +611,20 @@ class Cortex:
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
         
-        # STEP 2: Detect intent using fast regex patterns
-        fast_intent = self._detect_intent_fast(query)
-        
         # STEP 3: Route based on intent
-        if fast_intent == 'greeting':
-            # FAST PATH: Instant greeting response
-            step("⚡ Fast path (greeting)")
-            response = self._get_fast_response(fast_intent, query)
-            return {"type": "chat", "text": response, "fast_path": True}, log
-        
-        elif fast_intent == 'status':
-            # FAST PATH: Status from cached stats (no LLM needed)
+        if fast_intent == 'status':
             step("⚡ Fast path (status)")
             response = self._get_fast_response(fast_intent, query)
             return {"type": "chat", "text": response, "fast_path": True}, log
         
         elif fast_intent == 'quick_help':
-            # FAST PATH: Pre-defined help response
             step("⚡ Fast path (help)")
             response = self._get_fast_response(fast_intent, query)
             return {"type": "chat", "text": response, "fast_path": True}, log
         
         elif fast_intent == 'explain':
-            # FAST PATH: Quick definition/explanation without LLM
             step("⚡ Fast path (explain)")
             response = self._get_fast_response(fast_intent, query)
-            # Add follow-up questions to make it conversational
             follow_ups = generate_follow_up_questions(query, response, fast_intent)
             return {"type": "chat", "text": response, "fast_path": True, "follow_ups": follow_ups}, log
         
@@ -644,16 +666,13 @@ class Cortex:
                 follow_ups = generate_follow_up_questions(query, result['text'], complex_intent)
                 result['follow_ups'] = follow_ups
             
-            # Store in conversation history with automatic bounding to 20 entries (conversational flow)
-            self.conversation_history.append({
+            # Store in conversation history with automatic bounding to 20 entries
+            self._add_to_conversation_history({
                 "query": query,
                 "response": result.get('text', ''),
                 "intent": complex_intent,
                 "timestamp": datetime.now().isoformat()
             })
-            # Enforce hard limit of 20 entries for context retention benchmark
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
             
             return result, log
     
@@ -682,7 +701,17 @@ class Cortex:
             prefetch_context = prefetch_result.get('content', '')
             used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # STEP 1: Detect intent using fast regex patterns (check greetings FIRST - they're domain-agnostic)
+        fast_intent = self._detect_intent_fast(query)
+        
+        # Handle greetings immediately (domain-agnostic)
+        if fast_intent == 'greeting':
+            step("⚡ Fast path (greeting)")
+            response = self._get_fast_response(fast_intent, query)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # Note: This check comes AFTER greeting detection to allow friendly hellos
         if not self.is_godot_related(query) and not used_prefetch:
             step("🚫 Off-domain query detected")
             stop_words = {"how", "what", "why", "when", "where", "who", "can", "do", "does", "is", "are", "the", "a", "an", "to", "in", "for", "on", "with", "make", "create", "get", "use", "using"}
@@ -693,16 +722,8 @@ class Cortex:
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
         
-        # STEP 2: Detect intent using fast regex patterns
-        fast_intent = self._detect_intent_fast(query)
-        
         # STEP 3: Route based on intent
-        if fast_intent == 'greeting':
-            step("⚡ Fast path (greeting)")
-            response = self._get_fast_response(fast_intent, query)
-            return {"type": "chat", "text": response, "fast_path": True}, log
-        
-        elif fast_intent == 'status':
+        if fast_intent == 'status':
             step("⚡ Fast path (status)")
             response = self._get_fast_response(fast_intent, query)
             return {"type": "chat", "text": response, "fast_path": True}, log
@@ -745,15 +766,12 @@ class Cortex:
                 result['follow_ups'] = follow_ups
             
             # Store in conversation history with automatic bounding to 20 entries (async path)
-            self.conversation_history.append({
+            self._add_to_conversation_history({
                 "query": query,
                 "response": result.get('text', ''),
                 "intent": complex_intent,
                 "timestamp": datetime.now().isoformat()
             })
-            # Enforce hard limit of 20 entries for context retention benchmark
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
             
             return result, log
     
@@ -815,16 +833,13 @@ class Cortex:
             follow_ups = generate_follow_up_questions(query, response_text, "compositional")
             
             # Store in conversation history with automatic bounding to 20 entries (compositional path)
-            self.conversation_history.append({
+            self._add_to_conversation_history({
                 "query": query,
                 "response": response_text,
                 "intent": "compositional",
                 "timestamp": datetime.now().isoformat(),
                 "composition": metadata
             })
-            # Enforce hard limit of 20 entries for context retention benchmark
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
             
             # Build result with composition metadata
             result = {
@@ -1545,16 +1560,12 @@ class Cortex:
     def _update_conversation_state(self, query: str, response: str, user_profile: Dict):
         """Update conversation state for continuity"""
         try:
-            self.conversation_history.append({
+            self._add_to_conversation_history({
                 'query': query,
                 'response': response[:1000],
                 'timestamp': datetime.now().isoformat(),
                 'user_level': user_profile.get('level', 'intermediate')
             })
-            
-            # Keep history bounded
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
         except Exception as e:
             logger.warning(f"Failed to update conversation state: {e}")
     
