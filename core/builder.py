@@ -2128,7 +2128,16 @@ class EtherBrain:
                 prefetch_context = prefetch_result.get('content', '')
                 used_prefetch = True
         
-        # STEP 1: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
+        # STEP 1: Detect intent using fast regex patterns
+        fast_intent = detect_intent_fast(query)
+        
+        # FAST PATH: Allow greetings regardless of domain (CHECK BEFORE off-domain guard)
+        if fast_intent == 'greeting':
+            step("⚡ Fast path (greeting)")
+            response = get_fast_response(fast_intent, query, self.project_stats)
+            return {"type": "chat", "text": response, "fast_path": True}, log
+        
+        # STEP 2: OFF-DOMAIN GUARD - Filter non-Godot queries (BYPASS if prefetch hit)
         if not is_godot_related(query) and not used_prefetch:
             step("🚫 Off-domain query detected")
             # Extract topic from query for polite refusal
@@ -2141,22 +2150,11 @@ class EtherBrain:
             refusal = f"Ether is specialized for Godot/GDScript development. I cannot assist with {topic}."
             return {"type": "chat", "text": refusal, "fast_path": True}, log
         
-        # STEP 1: Detect intent using fast regex patterns
-        fast_intent = detect_intent_fast(query)
-        
-        # STEP 2: Check cache for repeated queries (only for non-greeting intents)
-        if fast_intent != 'greeting':
-            cached = _response_cache.get(query, fast_intent, self.project_fingerprint)
-            if cached is not None:
-                step("⚡ Cache hit!")
-                return {"type": "chat", "text": cached, "cached": True}, log
-        
-        # STEP 3: Route based on intent
-        if fast_intent == 'greeting':
-            # FAST PATH: Instant greeting response
-            step("⚡ Fast path (greeting)")
-            response = get_fast_response(fast_intent, query, self.project_stats)
-            return {"type": "chat", "text": response, "fast_path": True}, log
+        # STEP 3: Check cache for repeated queries (only for non-greeting intents)
+        cached = _response_cache.get(query, fast_intent, self.project_fingerprint)
+        if cached is not None:
+            step("⚡ Cache hit!")
+            return {"type": "chat", "text": cached, "cached": True}, log
         
         elif fast_intent == 'status':
             # FAST PATH: Status from cached stats (no LLM needed)
