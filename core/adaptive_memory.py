@@ -1,70 +1,55 @@
 """
-Adaptive Memory Engine (The Hippocampus) - Neuro-Dense Edition
------------------------------------------
-Replaces: memory_core, learning_engine, context_manager (state part)
+Adaptive Memory Engine (The Hippocampus) - Unified Memory System
+================================================================
+Replaces: ResponseCache, PersistentStorage, MemoryUnit, LRUCache
+
 Purpose: Self-improving memory with feedback learning and conversation history
 
-Improvements in v1.9.8:
+Features:
 - Thread-safe operations with RLock
 - Memory leak prevention with automatic cleanup
-- Scalability enhancements for large datasets
-- NEURO-DENSE: Zstd compression + numpy vector storage (10x density)
-- Stores compressed numpy arrays instead of raw strings
-- 200MB RAM cap holds ~800MB of logical knowledge
+- Conversation history bounded at 20 entries
+- LRU caching for responses
+- Persistent JSON storage for patterns and feedback
 """
 
 import os
 import json
 import hashlib
 import threading
-import weakref
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from collections import defaultdict
+from collections import OrderedDict
 from datetime import datetime
-import gc
-import numpy as np
-import zstandard as zstd
-ZSTD_AVAILABLE = True
+from functools import lru_cache
 
-class FeedbackEntry:
-    def __init__(self, entry_id: str, query: str, original_code: str, 
-                 suggested_fix: str, user_feedback: str, file_path: str = "", 
-                 error_type: str = "", metadata: Optional[Dict] = None):
-        self.entry_id = entry_id
-        self.timestamp = datetime.now().isoformat()
-        self.query = query
-        self.original_code = original_code
-        self.suggested_fix = suggested_fix
-        self.user_feedback = user_feedback
-        self.file_path = file_path
-        self.error_type = error_type
-        self.metadata = metadata or {}
-        self.features = self._extract_features()
-        
-    def _extract_features(self) -> Dict[str, Any]:
-        return {
-            "file_extension": Path(self.file_path).suffix if self.file_path else "unknown",
-            "error_type": self.error_type or "general",
-            "query_length": len(self.query),
-            "code_lines": len(self.original_code.split('\n')),
-            "fix_lines": len(self.suggested_fix.split('\n')),
-            "keywords": self._extract_keywords()
-        }
-        
-    def _extract_keywords(self) -> List[str]:
-        import re
-        text = f"{self.query} {self.original_code}".lower()
-        keywords = re.findall(r'\b(?:signal|export|onready|var|const|enum|func|class|extends|yield|await|match|break|continue|return|if|elif|else|for|while|try|catch|except|finally|node|scene|tree|process|physics|input)\b', text)
-        return list(set(keywords))
-        
-    def to_dict(self) -> Dict:
-        return {
-            "id": self.entry_id, "timestamp": self.timestamp,
-            "query": self.query[:200], "file_path": self.file_path,
-            "error_type": self.error_type, "feedback": self.user_feedback,
-            "features": self.features
-        }
+
+class ResponseCache:
+    """Simple LRU cache for responses (replaces builder.py ResponseCache)."""
+    
+    def __init__(self, max_size: int = 100):
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.RLock()
+    
+    def get(self, key: str) -> Optional[Any]:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
+    
+    def set(self, key: str, value: Any):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = value
+            while len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
+    
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
 
 
 class AdaptiveMemory:
@@ -72,11 +57,11 @@ class AdaptiveMemory:
     The Hippocampus: Learns from feedback, manages conversation history, and stores patterns.
     
     Thread-safe implementation with automatic memory management.
-    NEURO-DENSE: Uses compressed numpy arrays for 10x storage density.
+    Consolidates: AdaptiveMemory, ResponseCache, PersistentStorage, MemoryUnit, LRUCache
     """
     
-    def __init__(self, storage_path: str = "memory_data", max_history_size: int = 50, 
-                 auto_cleanup_interval: int = 100, ram_cap_mb: int = 200):
+    def __init__(self, storage_path: str = "memory_data", max_history_size: int = 20, 
+                 auto_cleanup_interval: int = 100):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
@@ -84,405 +69,157 @@ class AdaptiveMemory:
         self.feedback_file = self.storage_path / "feedback_log.json"
         self.patterns_file = self.storage_path / "learned_patterns.json"
         self.history_file = self.storage_path / "conversation_history.json"
-        self.vector_store_dir = self.storage_path / "vector_store"  # For compressed arrays
-        self.vector_store_dir.mkdir(parents=True, exist_ok=True)
         
-        # In-memory cache with weak references for memory efficiency
-        self.feedback_history: List[FeedbackEntry] = []
-        self.learned_patterns: Dict[str, List[Dict]] = defaultdict(list)
-        self.conversation_history: List[Dict] = []
+        # In-memory storage
+        self.feedback_history: List[Dict] = []
+        self.learned_patterns: Dict[str, List[Dict]] = {}
+        self._conversation_history: List[Dict] = []
+        self._history_max_length = max_history_size
         
-        # Vector store index (maps keys to file paths)
-        self.vector_index: Dict[str, str] = {}  # key -> filename
+        # Response cache (LRU)
+        self.response_cache = ResponseCache(max_size=100)
         
         # Statistics
         self.total_accepted = 0
         self.total_rejected = 0
-        self.success_rate = 0.0
-        self.total_stored_bytes = 0
-        
-        # RAM cap management
-        self.ram_cap_bytes = ram_cap_mb * 1024 * 1024
+        self.operation_count = 0
         
         # Thread safety
         self._lock = threading.RLock()
         
-        # Memory management
-        self.max_history_size = max_history_size
-        self.auto_cleanup_interval = auto_cleanup_interval
-        self._operation_count = 0
-        
-        # Compression setup
-        if ZSTD_AVAILABLE:
-            self.compressor = zstd.ZstdCompressor(level=3)  # Fast compression
-            self.decompressor = zstd.ZstdDecompressor()
-        else:
-            self.compressor = None
-            self.decompressor = None
-        
+        # Load persisted data
         self._load_data()
-        
+    
     def _load_data(self):
-        """Load data from disk with thread safety."""
-        with self._lock:
-            if self.feedback_file.exists():
-                try:
-                    with open(self.feedback_file, 'r') as f:
-                        data = json.load(f)
-                        self.feedback_history = [
-                            FeedbackEntry(
-                                entry_id=item['id'], query=item['query'],
-                                original_code=item.get('original_code', ''),
-                                suggested_fix=item.get('suggested_fix', ''),
-                                user_feedback=item['feedback'],
-                                file_path=item.get('file_path', ''),
-                                error_type=item.get('error_type', '')
-                            ) for item in data
-                        ]
-                    self._recalculate_stats()
-                except Exception as e:
-                    print(f"[AdaptiveMemory] Error loading feedback: {e}")
-                    
-            if self.patterns_file.exists():
-                try:
-                    with open(self.patterns_file, 'r') as f:
-                        self.learned_patterns = defaultdict(list, json.load(f))
-                except Exception as e:
-                    print(f"[AdaptiveMemory] Error loading patterns: {e}")
-                    
-            if self.history_file.exists():
-                try:
-                    with open(self.history_file, 'r') as f:
-                        self.conversation_history = json.load(f)
-                except Exception as e:
-                    print(f"[AdaptiveMemory] Error loading history: {e}")
-            
-            # Load vector store index
-            index_file = self.storage_path / "vector_index.json"
-            if index_file.exists():
-                try:
-                    with open(index_file, 'r') as f:
-                        self.vector_index = json.load(f)
-                    # Calculate total stored bytes
-                    self.total_stored_bytes = sum(
-                        (self.vector_store_dir / fname).stat().st_size 
-                        for fname in self.vector_index.values() 
-                        if (self.vector_store_dir / fname).exists()
-                    )
-                except Exception as e:
-                    print(f"[AdaptiveMemory] Error loading vector index: {e}")
-    
-    def _compress_and_store(self, key: str, text: str) -> str:
-        """Compress text into numpy array and store on disk. Returns filename."""
-        # Convert text to numpy array of uint8 (bytes)
-        text_bytes = text.encode('utf-8')
-        arr = np.frombuffer(text_bytes, dtype=np.uint8)
-        
-        if ZSTD_AVAILABLE and self.compressor:
-            # Compress the array data
-            compressed = self.compressor.compress(arr.tobytes())
-        else:
-            compressed = arr.tobytes()
-        
-        # Save to disk
-        filename = f"{key}.npy.zst" if ZSTD_AVAILABLE else f"{key}.npy"
-        filepath = self.vector_store_dir / filename
-        
-        # Store metadata + compressed data in one file
-        metadata = {
-            'original_length': len(text),
-            'compressed_length': len(compressed),
-            'dtype': 'uint8'
-        }
-        
-        with open(filepath, 'wb') as f:
-            # Write metadata length (4 bytes)
-            import struct
-            meta_bytes = json.dumps(metadata).encode('utf-8')
-            f.write(struct.pack('>I', len(meta_bytes)))
-            f.write(meta_bytes)
-            f.write(compressed)
-        
-        return filename
-    
-    def _decompress_and_load(self, filename: str) -> str:
-        """Load compressed numpy array from disk and decompress to text."""
-        filepath = self.vector_store_dir / filename
-        
-        if not filepath.exists():
-            return ""
-        
-        with open(filepath, 'rb') as f:
-            # Read metadata length
-            import struct
-            meta_len_bytes = f.read(4)
-            if len(meta_len_bytes) < 4:
-                return ""
-            meta_len = struct.unpack('>I', meta_len_bytes)[0]
-            
-            # Read metadata
-            meta_bytes = f.read(meta_len)
-            metadata = json.loads(meta_bytes.decode('utf-8'))
-            
-            # Read compressed data
-            compressed = f.read()
-        
-        if ZSTD_AVAILABLE and self.decompressor:
-            # Decompress
-            decompressed_bytes = self.decompressor.decompress(compressed)
-        else:
-            decompressed_bytes = compressed
-        
-        # Convert back to text
-        arr = np.frombuffer(decompressed_bytes, dtype=np.uint8)
-        return arr.tobytes().decode('utf-8')
-    
-    def store_knowledge(self, key: str, content: str) -> bool:
-        """Store knowledge chunk with compression. Respects RAM cap."""
-        with self._lock:
-            # Check if we need to evict before storing
-            estimated_size = len(content.encode('utf-8')) // 3  # Estimate 3x compression
-            while self.total_stored_bytes + estimated_size > self.ram_cap_bytes and self.vector_index:
-                # Evict oldest entry (FIFO for simplicity, could be LRU)
-                oldest_key = next(iter(self.vector_index))
-                self.evict_knowledge(oldest_key)
-            
-            # Compress and store
-            filename = self._compress_and_store(key, content)
-            self.vector_index[key] = filename
-            self.total_stored_bytes += (self.vector_store_dir / filename).stat().st_size
-            
-            # Save updated index
-            self._save_vector_index()
-            return True
-    
-    def retrieve_knowledge(self, key: str) -> str:
-        """Retrieve knowledge chunk by key."""
-        with self._lock:
-            if key not in self.vector_index:
-                return ""
-            filename = self.vector_index[key]
-            return self._decompress_and_load(filename)
-    
-    def evict_knowledge(self, key: str) -> bool:
-        """Evict knowledge chunk to free space."""
-        with self._lock:
-            if key not in self.vector_index:
-                return False
-            
-            filename = self.vector_index.pop(key)
-            filepath = self.vector_store_dir / filename
-            
-            if filepath.exists():
-                file_size = filepath.stat().st_size
-                filepath.unlink()
-                self.total_stored_bytes -= file_size
-            
-            self._save_vector_index()
-            return True
-    
-    def _save_vector_index(self):
-        """Save vector index to disk."""
-        index_file = self.storage_path / "vector_index.json"
+        """Load persisted data from disk."""
         try:
-            with open(index_file, 'w') as f:
-                json.dump(self.vector_index, f, indent=2)
+            if self.history_file.exists():
+                with open(self.history_file, 'r') as f:
+                    data = json.load(f)
+                    self._conversation_history = data[-self._history_max_length:]
+            
+            if self.feedback_file.exists():
+                with open(self.feedback_file, 'r') as f:
+                    self.feedback_history = json.load(f)
+            
+            if self.patterns_file.exists():
+                with open(self.patterns_file, 'r') as f:
+                    self.learned_patterns = json.load(f)
         except Exception as e:
-            print(f"[AdaptiveMemory] Error saving vector index: {e}")
+            logger.warning(f"Could not load memory data: {e}")
     
-    def get_storage_stats(self) -> Dict:
-        """Get storage statistics including compression ratio."""
-        with self._lock:
-            total_original = 0
-            total_compressed = self.total_stored_bytes
-            
-            # Estimate original size by reading metadata
-            for filename in self.vector_index.values():
-                filepath = self.vector_store_dir / filename
-                if filepath.exists():
-                    try:
-                        with open(filepath, 'rb') as f:
-                            import struct
-                            meta_len = struct.unpack('>I', f.read(4))[0]
-                            metadata = json.loads(f.read(meta_len).decode('utf-8'))
-                            total_original += metadata.get('original_length', 0)
-                    except:
-                        pass
-            
-            compression_ratio = total_original / max(total_compressed, 1)
-            
-            return {
-                "total_entries": len(self.vector_index),
-                "compressed_size_mb": round(self.total_stored_bytes / (1024 * 1024), 2),
-                "original_size_mb": round(total_original / (1024 * 1024), 2),
-                "compression_ratio": round(compression_ratio, 2),
-                "ram_cap_mb": self.ram_cap_bytes // (1024 * 1024),
-                "usage_percent": round((self.total_stored_bytes / max(self.ram_cap_bytes, 1)) * 100, 1)
-            }
-        
     def _save_data(self):
-        """Save data to disk with thread safety."""
-        with self._lock:
-            try:
-                with open(self.feedback_file, 'w') as f:
-                    json.dump([entry.to_dict() for entry in self.feedback_history], f, indent=2)
-                with open(self.patterns_file, 'w') as f:
-                    json.dump(dict(self.learned_patterns), f, indent=2)
-                with open(self.history_file, 'w') as f:
-                    json.dump(self.conversation_history, f, indent=2)
-            except Exception as e:
-                print(f"[AdaptiveMemory] Error saving data: {e}")
+        """Persist data to disk."""
+        try:
+            with open(self.history_file, 'w') as f:
+                json.dump(self._conversation_history, f, indent=2)
             
-    def _recalculate_stats(self):
-        self.total_accepted = sum(1 for e in self.feedback_history if e.user_feedback == 'accepted')
-        self.total_rejected = sum(1 for e in self.feedback_history if e.user_feedback == 'rejected')
-        total = self.total_accepted + self.total_rejected
-        self.success_rate = (self.total_accepted / total * 100) if total > 0 else 0.0
-        
-    def record_feedback(self, query: str, original_code: str, suggested_fix: str,
-                       user_feedback: str, file_path: str = "", error_type: str = "",
-                       metadata: Optional[Dict] = None) -> str:
-        """Record user feedback with thread safety and memory management."""
-        with self._lock:
-            entry_id = hashlib.md5(f"{datetime.now().isoformat()}:{query[:50]}".encode()).hexdigest()[:12]
+            with open(self.feedback_file, 'w') as f:
+                json.dump(self.feedback_history, f, indent=2)
             
-            entry = FeedbackEntry(
-                entry_id=entry_id, query=query, original_code=original_code,
-                suggested_fix=suggested_fix, user_feedback=user_feedback,
-                file_path=file_path, error_type=error_type, metadata=metadata
-            )
-            
-            self.feedback_history.append(entry)
-            self._recalculate_stats()
-            self._update_patterns(entry)
-            self._save_data()
-            
-            # Memory management: check if cleanup needed
-            self._operation_count += 1
-            if self._operation_count % self.auto_cleanup_interval == 0:
-                self._cleanup_memory()
-            
-            return entry_id
+            with open(self.patterns_file, 'w') as f:
+                json.dump(self.learned_patterns, f, indent=2)
+        except Exception as e:
+            logger.error(f"Could not save memory data: {e}")
     
-    def _cleanup_memory(self):
-        """Prevent memory leaks by trimming old data and forcing garbage collection."""
-        # Trim conversation history if too large
-        if len(self.conversation_history) > self.max_history_size * 2:
-            self.conversation_history = self.conversation_history[-self.max_history_size:]
-        
-        # Trim feedback history for very old entries (keep last 1000)
-        if len(self.feedback_history) > 1000:
-            self.feedback_history = self.feedback_history[-1000:]
-        
-        # Force garbage collection
-        gc.collect()
-        
-    def _update_patterns(self, entry: FeedbackEntry):
-        if entry.user_feedback != 'accepted':
-            return
-            
-        category = f"{entry.features['error_type']}_{entry.features['file_extension']}"
-        
-        pattern = {
-            "query_pattern": entry.query[:100],
-            "keywords": entry.features['keywords'],
-            "fix_preview": entry.suggested_fix[:200],
-            "success_count": 1,
-            "last_used": entry.timestamp
-        }
-        
-        existing = self.learned_patterns[category]
-        similar_found = False
-        
-        for p in existing:
-            shared_keywords = set(p['keywords']) & set(pattern['keywords'])
-            if len(shared_keywords) >= 2:
-                p['success_count'] += 1
-                p['last_used'] = pattern['last_used']
-                similar_found = True
-                break
-                
-        if not similar_found:
-            self.learned_patterns[category].append(pattern)
-            
-        self.learned_patterns[category] = sorted(
-            self.learned_patterns[category],
-            key=lambda x: x['success_count'], reverse=True
-        )[:20]
-        
-    def get_learning_context(self, query: str, file_path: str = "", 
-                            error_type: str = "") -> List[Dict]:
-        ext = Path(file_path).suffix if file_path else ".gd"
-        category = f"{error_type}_{ext}" if error_type else f"general_{ext}"
-        
-        candidates = []
-        
-        if category in self.learned_patterns:
-            candidates.extend(self.learned_patterns[category])
-        if f"general_{ext}" in self.learned_patterns:
-            candidates.extend(self.learned_patterns[f"general_{ext}"])
-            
-        query_keywords = set(query.lower().split())
-        for entry in self.feedback_history[-100:]:
-            if entry.user_feedback == 'accepted':
-                entry_keywords = set(entry.query.lower().split())
-                similarity = len(query_keywords & entry_keywords) / max(len(query_keywords), 1)
-                if similarity > 0.3:
-                    candidates.append({
-                        "query_example": entry.query,
-                        "fix_example": entry.suggested_fix[:300],
-                        "relevance": similarity
-                    })
-                    
-        candidates = sorted(
-            candidates,
-            key=lambda x: x.get('success_count', 0) + x.get('relevance', 0) * 10,
-            reverse=True
-        )
-        
-        return candidates[:5]
-        
-    def add_to_history(self, role: str, content: str, query: str = ""):
-        """Add to conversation history with thread safety and size limits."""
+    @property
+    def conversation_history(self) -> List[Dict]:
+        """Get conversation history (bounded to max_length entries)."""
         with self._lock:
-            self.conversation_history.append({
-                "role": role, "content": content[:2000], 
-                "query": query[:200], "timestamp": datetime.now().isoformat()
-            })
-            # Keep last N messages (configurable, default 50)
-            if len(self.conversation_history) > self.max_history_size:
-                self.conversation_history = self.conversation_history[-self.max_history_size:]
-            self._save_data()
-        
-    def get_recent_history(self, limit: int = 10) -> List[Dict]:
-        return self.conversation_history[-limit:]
-        
-    def clear_history(self):
-        """Clear conversation history with thread safety."""
+            if len(self._conversation_history) > self._history_max_length:
+                self._conversation_history = self._conversation_history[-self._history_max_length:]
+            return self._conversation_history
+    
+    @conversation_history.setter
+    def conversation_history(self, value: List[Dict]):
+        """Set conversation history with automatic bounding."""
         with self._lock:
-            self.conversation_history.clear()
+            self._conversation_history = value[-self._history_max_length:] if len(value) > self._history_max_length else value
+    
+    def add_to_conversation_history(self, entry: Dict):
+        """Add entry to conversation history with automatic bounding."""
+        with self._lock:
+            self._conversation_history.append(entry)
+            # Enforce hard limit - THIS IS THE CRITICAL FIX
+            if len(self._conversation_history) > self._history_max_length:
+                self._conversation_history = self._conversation_history[-self._history_max_length:]
             self._save_data()
-        
+    
+    def get_conversation_history(self, limit: int = None) -> List[Dict]:
+        """Get recent conversation history."""
+        with self._lock:
+            if limit is None:
+                limit = self._history_max_length
+            return self._conversation_history[-limit:]
+    
+    def clear_conversation_history(self):
+        """Clear conversation history."""
+        with self._lock:
+            self._conversation_history.clear()
+            self._save_data()
+    
+    def add_feedback(self, feedback_entry: Dict):
+        """Add feedback entry."""
+        with self._lock:
+            self.feedback_history.append(feedback_entry)
+            self._save_data()
+    
+    def add_pattern(self, pattern_key: str, pattern_data: Dict):
+        """Add learned pattern."""
+        with self._lock:
+            if pattern_key not in self.learned_patterns:
+                self.learned_patterns[pattern_key] = []
+            self.learned_patterns[pattern_key].append(pattern_data)
+            self._save_data()
+    
+    def get_patterns(self, pattern_key: str) -> List[Dict]:
+        """Get patterns by key."""
+        with self._lock:
+            return self.learned_patterns.get(pattern_key, [])
+    
+    def cache_response(self, key: str, response: Any):
+        """Cache a response."""
+        self.response_cache.set(key, response)
+    
+    def get_cached_response(self, key: str) -> Optional[Any]:
+        """Get cached response."""
+        return self.response_cache.get(key)
+    
     def get_stats(self) -> Dict:
-        """Get memory statistics in a thread-safe manner."""
+        """Get memory statistics."""
         with self._lock:
             return {
-                "total_feedback": len(self.feedback_history),
-                "accepted": self.total_accepted,
-                "rejected": self.total_rejected,
-                "success_rate": f"{self.success_rate:.1f}%",
-                "pattern_categories": len(self.learned_patterns),
-                "total_patterns": sum(len(p) for p in self.learned_patterns.values()),
-                "conversation_turns": len(self.conversation_history),
-                "memory_safe": len(self.conversation_history) <= self.max_history_size * 2
+                "conversation_turns": len(self._conversation_history),
+                "feedback_entries": len(self.feedback_history),
+                "pattern_keys": len(self.learned_patterns),
+                "cache_size": len(self.response_cache._cache),
+                "memory_safe": len(self._conversation_history) <= self._history_max_length
             }
+    
+    def cleanup(self):
+        """Cleanup old data."""
+        with self._lock:
+            # Ensure history is bounded
+            if len(self._conversation_history) > self._history_max_length * 2:
+                self._conversation_history = self._conversation_history[-self._history_max_length:]
+            self._save_data()
 
 
 # Singleton instance
-_instance: Optional[AdaptiveMemory] = None
+_memory_instance: Optional[AdaptiveMemory] = None
+_memory_lock = threading.Lock()
+
 
 def get_adaptive_memory(storage_path: str = "memory_data") -> AdaptiveMemory:
-    global _instance
-    if _instance is None:
-        _instance = AdaptiveMemory(storage_path)
-    return _instance
+    """Get singleton AdaptiveMemory instance."""
+    global _memory_instance
+    with _memory_lock:
+        if _memory_instance is None:
+            _memory_instance = AdaptiveMemory(storage_path)
+        return _memory_instance
+
+
+# Simple LRU cache decorator for functions (replaces utils/project_loader.py LRUCache)
+def memoize(maxsize: int = 128):
+    """Decorator for memoization with LRU eviction."""
+    return lru_cache(maxsize=maxsize)

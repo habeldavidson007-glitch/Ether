@@ -471,16 +471,11 @@ class Cortex:
     @property
     def conversation_history(self) -> List[Dict[str, Any]]:
         """Get conversation history (bounded to max_length entries)"""
-        # Return a bounded list wrapper that enforces limits on append
-        if not hasattr(self, '_bounded_history'):
-            self._bounded_history = self._BoundedList(self, self._conversation_history)
-        else:
-            # Update the bounded list with current contents
-            while len(self._bounded_history) > len(self._conversation_history):
-                self._bounded_history.pop()
-            while len(self._bounded_history) < len(self._conversation_history):
-                self._bounded_history.append(self._conversation_history[len(self._bounded_history)])
-        return self._bounded_history
+        # Return the internal list directly - bounding is handled by _add_to_conversation_history
+        # and the setter. For direct appends, we enforce the bound after access.
+        if len(self._conversation_history) > self._history_max_length:
+            self._conversation_history = self._conversation_history[-self._history_max_length:]
+        return self._conversation_history
     
     @conversation_history.setter
     def conversation_history(self, value: List[Dict[str, Any]]):
@@ -493,20 +488,6 @@ class Cortex:
         # Enforce hard limit
         if len(self._conversation_history) > self._history_max_length:
             self._conversation_history = self._conversation_history[-self._history_max_length:]
-    
-    class _BoundedList(list):
-        """A list that enforces a maximum length on append operations"""
-        def __init__(self, parent: 'Cortex', initial=None):
-            super().__init__(initial or [])
-            self._parent = parent
-        
-        def append(self, item):
-            super().append(item)
-            # Enforce hard limit after every append
-            if len(self) > self._parent._history_max_length:
-                # Remove oldest entries
-                while len(self) > self._parent._history_max_length:
-                    self.pop(0)
     
     @property
     def search_engine(self):
