@@ -49,7 +49,7 @@ from core.unified_search import get_unified_search
 from core.adaptive_memory import get_adaptive_memory
 from core.safety_preview import get_safety_preview
 from core.feedback_commands import get_feedback_manager
-from core.composer import get_composer, Conductor, MeasureLibrary, CompositionalCortex
+from personality import get_composer, Conductor, MeasureLibrary, CompositionalCortex
 
 logger = logging.getLogger(__name__)
 
@@ -420,7 +420,7 @@ class Cortex:
     This is THE single entry point for all AI queries.
     """
     
-    def __init__(self, project_root: str = None, enable_watchdog: bool = True, enable_composer: bool = True):
+    def __init__(self, project_root: str = None, enable_watchdog: bool = True, enable_composer: bool = False):
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.hippocampus = Hippocampus()
         self.cortex = IntentClassifier()  # Intent classification
@@ -442,11 +442,15 @@ class Cortex:
         if self.watchdog:
             self.watchdog.register_callback(self._on_watchdog_event)
         
-        # Compositional architecture (musical measure engine)
+        # Compositional architecture (musical measure engine) - DISABLED BY DEFAULT
+        # Enable only for social/creative queries (~20% of use cases)
+        # For coding/documents/math tasks, use standard pipelines (80% of use cases)
         self.enable_composer = enable_composer
         if enable_composer:
             self._composer = get_composer()
             logger.info("Compositional architecture enabled (176 measures, 16-bar structure)")
+        else:
+            logger.info("Compositional architecture disabled - using streamlined pipelines for practical tasks")
         
         # Async executor for non-blocking I/O
         self._executor = ThreadPoolExecutor(max_workers=4)

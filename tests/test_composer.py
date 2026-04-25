@@ -12,7 +12,7 @@ Tests verify:
 
 import pytest
 import asyncio
-from core.composer import (
+from personality.composer import (
     Conductor, MeasureLibrary, Measure, MeasureType, 
     DiceEngine, Bar, Score, CompositionalCortex,
     get_composer
