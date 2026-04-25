@@ -74,9 +74,14 @@ class EtherEngine:
         
         try:
             from core.static_analyzer import StaticAnalyzer
+            # Fallback to new unified analyzer if old one doesn't exist
             self._static_analyzer = StaticAnalyzer()
         except ImportError:
-            self._static_analyzer = None
+            try:
+                from ether.godot.gdscript_analyzer import GDScriptAnalyzer
+                self._static_analyzer = GDScriptAnalyzer()
+            except ImportError:
+                self._static_analyzer = None
             
         try:
             from core.dependency_graph import DependencyGraph
@@ -88,7 +93,11 @@ class EtherEngine:
             from core.godot_validator import GodotValidator
             self._godot_validator = GodotValidator()
         except ImportError:
-            self._godot_validator = None
+            try:
+                from ether.godot.gdscript_analyzer import GDScriptAnalyzer
+                self._godot_validator = GDScriptAnalyzer()
+            except ImportError:
+                self._godot_validator = None
         
         try:
             from core.scene_graph_analyzer import SceneGraphAnalyzer
@@ -102,22 +111,26 @@ class EtherEngine:
             self._godot_expert = GodotExpert()
             self._semantic_scene_editor = SemanticSceneEditor()
         except ImportError:
-            self._godot_expert = None
-            self._semantic_scene_editor = None
+            try:
+                from ether.godot.gdscript_analyzer import GDScriptAnalyzer
+                self._godot_expert = GDScriptAnalyzer()
+                self._semantic_scene_editor = None
+            except ImportError:
+                self._godot_expert = None
+                self._semantic_scene_editor = None
         
-        # NEW: Memory Core and Cascade Scanner for proactive learning
+        # NEW: Memory Core and Project Scanner for proactive learning
         try:
             from core.memory_core import MemoryCore
-            from core.cascade_scanner import CascadeScanner
+            from utils.project_scanner import ProjectScanner
             self._memory_core = None  # Will be initialized on project load
-            self._cascade_scanner = CascadeScanner(
+            self._project_scanner = ProjectScanner(
                 self._dependency_graph, 
-                self._static_analyzer, 
-                None  # Memory core will be set after initialization
+                self._static_analyzer
             )
         except ImportError:
             self._memory_core = None
-            self._cascade_scanner = None
+            self._project_scanner = None
         
         self._initialized = True
     
@@ -179,9 +192,9 @@ class EtherEngine:
                 from core.memory_core import MemoryCore
                 self._memory_core = MemoryCore(self.project_path)
                 
-                # Update cascade scanner with memory core
-                if self._cascade_scanner:
-                    self._cascade_scanner.memory_core = self._memory_core
+                # Update project scanner with memory core
+                if self._project_scanner:
+                    self._project_scanner.memory_core = self._memory_core
             
             stats = self.project_stats
             message = f"✓ Project loaded: {stats['script_count']} scripts, {stats['scene_count']} scenes"
@@ -271,7 +284,7 @@ class EtherEngine:
             'has_godot_validator': self._godot_validator is not None,
             'has_scene_graph_analyzer': self._scene_graph_analyzer is not None,
             'has_memory_core': self._memory_core is not None,
-            'has_cascade_scanner': self._cascade_scanner is not None,
+            'has_project_scanner': self._project_scanner is not None,
             'validator_status': validator_status,
             'dependency_stats': dep_graph_stats,
             'scene_stats': scene_stats,
@@ -361,10 +374,10 @@ class EtherEngine:
         """
         self._ensure_initialized()
         
-        if not self._cascade_scanner:
+        if not self._project_scanner:
             return None
         
-        return self._cascade_scanner.scan(file_path, changes_made)
+        return self._project_scanner.scan(file_path, changes_made)
     
     def get_memory_summary(self) -> Dict:
         """
