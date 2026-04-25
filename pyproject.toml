@@ -36,6 +36,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+markers = [
+    "asyncio: marks tests as asyncio tests",
+]
 
 [tool.black]
 line-length = 88
