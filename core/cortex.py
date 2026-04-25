@@ -426,7 +426,8 @@ class Cortex:
         self.cortex = IntentClassifier()  # Intent classification
         self.safety = SafetyGuard()
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.conversation_history: List[Dict[str, Any]] = []
+        self._conversation_history: List[Dict[str, Any]] = []
+        self._history_max_length = 20
         
         # Lazy-loaded components
         self._search_engine = None
@@ -466,6 +467,46 @@ class Cortex:
     def _on_watchdog_event(self, event: str, data: Any):
         """Handle watchdog health events"""
         logger.warning(f"Watchdog event: {event} - {data}")
+    
+    @property
+    def conversation_history(self) -> List[Dict[str, Any]]:
+        """Get conversation history (bounded to max_length entries)"""
+        # Return a bounded list wrapper that enforces limits on append
+        if not hasattr(self, '_bounded_history'):
+            self._bounded_history = self._BoundedList(self, self._conversation_history)
+        else:
+            # Update the bounded list with current contents
+            while len(self._bounded_history) > len(self._conversation_history):
+                self._bounded_history.pop()
+            while len(self._bounded_history) < len(self._conversation_history):
+                self._bounded_history.append(self._conversation_history[len(self._bounded_history)])
+        return self._bounded_history
+    
+    @conversation_history.setter
+    def conversation_history(self, value: List[Dict[str, Any]]):
+        """Set conversation history with automatic bounding"""
+        self._conversation_history = value[-self._history_max_length:] if len(value) > self._history_max_length else value
+    
+    def _add_to_conversation_history(self, entry: Dict[str, Any]):
+        """Add entry to conversation history with automatic bounding"""
+        self._conversation_history.append(entry)
+        # Enforce hard limit
+        if len(self._conversation_history) > self._history_max_length:
+            self._conversation_history = self._conversation_history[-self._history_max_length:]
+    
+    class _BoundedList(list):
+        """A list that enforces a maximum length on append operations"""
+        def __init__(self, parent: 'Cortex', initial=None):
+            super().__init__(initial or [])
+            self._parent = parent
+        
+        def append(self, item):
+            super().append(item)
+            # Enforce hard limit after every append
+            if len(self) > self._parent._history_max_length:
+                # Remove oldest entries
+                while len(self) > self._parent._history_max_length:
+                    self.pop(0)
     
     @property
     def search_engine(self):
@@ -641,16 +682,13 @@ class Cortex:
                 follow_ups = generate_follow_up_questions(query, result['text'], complex_intent)
                 result['follow_ups'] = follow_ups
             
-            # Store in conversation history with automatic bounding to 20 entries (conversational flow)
-            self.conversation_history.append({
+            # Store in conversation history with automatic bounding to 20 entries
+            self._add_to_conversation_history({
                 "query": query,
                 "response": result.get('text', ''),
                 "intent": complex_intent,
                 "timestamp": datetime.now().isoformat()
             })
-            # Enforce hard limit of 20 entries for context retention benchmark
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
             
             return result, log
     
@@ -744,15 +782,12 @@ class Cortex:
                 result['follow_ups'] = follow_ups
             
             # Store in conversation history with automatic bounding to 20 entries (async path)
-            self.conversation_history.append({
+            self._add_to_conversation_history({
                 "query": query,
                 "response": result.get('text', ''),
                 "intent": complex_intent,
                 "timestamp": datetime.now().isoformat()
             })
-            # Enforce hard limit of 20 entries for context retention benchmark
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
             
             return result, log
     
@@ -814,16 +849,13 @@ class Cortex:
             follow_ups = generate_follow_up_questions(query, response_text, "compositional")
             
             # Store in conversation history with automatic bounding to 20 entries (compositional path)
-            self.conversation_history.append({
+            self._add_to_conversation_history({
                 "query": query,
                 "response": response_text,
                 "intent": "compositional",
                 "timestamp": datetime.now().isoformat(),
                 "composition": metadata
             })
-            # Enforce hard limit of 20 entries for context retention benchmark
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
             
             # Build result with composition metadata
             result = {
@@ -1544,16 +1576,12 @@ class Cortex:
     def _update_conversation_state(self, query: str, response: str, user_profile: Dict):
         """Update conversation state for continuity"""
         try:
-            self.conversation_history.append({
+            self._add_to_conversation_history({
                 'query': query,
                 'response': response[:1000],
                 'timestamp': datetime.now().isoformat(),
                 'user_level': user_profile.get('level', 'intermediate')
             })
-            
-            # Keep history bounded
-            if len(self.conversation_history) > 20:
-                self.conversation_history = self.conversation_history[-20:]
         except Exception as e:
             logger.warning(f"Failed to update conversation state: {e}")
     
