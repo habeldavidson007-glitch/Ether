@@ -340,23 +340,40 @@ class Cortex:
     
     def classify_intent(self, query: str) -> Tuple[str, float]:
         """
-        Classify intent of a query.
+        Classify intent of a query - DEPRECATED.
+        
+        This method now delegates to the unified classify_intent() from ml_intent.py.
+        Kept for backward compatibility but should be replaced with direct imports.
+        
+        Usage:
+            from ether.core.ml_intent import classify_intent, MLIntentClassifier
+            classifier = MLIntentClassifier()
+            intent = classifier.predict(query)
+            confidence = 0.8  # Use predict_with_confidence() for actual confidence
         
         Returns:
             (intent, confidence) tuple
         """
-        # Try ML classification first
-        if ML_AVAILABLE and self.trained and self.classifier:
-            try:
-                prediction = self.classifier.predict([query])[0]
-                probabilities = self.classifier.predict_proba([query])[0]
-                confidence = max(probabilities)
-                return prediction, confidence
-            except Exception as e:
-                logger.warning(f"ML prediction failed: {e}")
-        
-        # Fallback to rule-based
-        return self._classify_rule_based(query)
+        # Import here to avoid circular dependency
+        try:
+            from ether.core.ml_intent import MLIntentClassifier
+            classifier = MLIntentClassifier()
+            intent, confidence = classifier.predict_with_confidence(query)
+            return intent, confidence
+        except ImportError:
+            # Fallback to old logic if unified module not available
+            # Try ML classification first
+            if ML_AVAILABLE and self.trained and self.classifier:
+                try:
+                    prediction = self.classifier.predict([query])[0]
+                    probabilities = self.classifier.predict_proba([query])[0]
+                    confidence = max(probabilities)
+                    return prediction, confidence
+                except Exception as e:
+                    logger.warning(f"ML prediction failed: {e}")
+            
+            # Fallback to rule-based
+            return self._classify_rule_based(query)
     
     def _classify_rule_based(self, query: str) -> Tuple[str, float]:
         """Rule-based intent classification fallback."""

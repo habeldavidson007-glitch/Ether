@@ -471,22 +471,40 @@ def is_casual(text: str) -> bool:
 
 
 def classify(text: str) -> str:
-    """Classify user intent. Returns: casual, debug, build, analyze, or task."""
-    text_lower = text.lower()
+    """
+    Classify user intent - DEPRECATED.
+    
+    This function now delegates to the unified classify_intent() from ml_intent.py.
+    Kept for backward compatibility but should be replaced with direct imports.
+    
+    Usage:
+        from ether.core.ml_intent import classify_intent
+        intent = classify_intent(text)
+    
+    Old behavior: Returns: casual, debug, build, analyze, or task.
+    New behavior: Returns: debug, explain, create, optimize, search, chat, or general.
+    """
+    # Import here to avoid circular dependency
+    try:
+        from ether.core.ml_intent import classify_intent as unified_classify
+        return unified_classify(text)
+    except ImportError:
+        # Fallback to old logic if unified module not available
+        text_lower = text.lower()
 
-    if any(k in text_lower for k in ["fix", "bug", "error", "debug", "crash", "broken", "fail"]):
-        return "debug"
+        if any(k in text_lower for k in ["fix", "bug", "error", "debug", "crash", "broken", "fail"]):
+            return "debug"
 
-    if any(k in text_lower for k in ["build", "create", "make", "implement", "generate", "write", "add"]):
-        return "build"
+        if any(k in text_lower for k in ["build", "create", "make", "implement", "generate", "write", "add"]):
+            return "build"
 
-    # Catch analysis/review queries — these need real file context
-    if any(k in text_lower for k in ["analyze", "explain", "list", "find", "show", "what",
-                                      "how", "why", "review", "check", "issues", "problems",
-                                      "tell me", "describe", "look at", "read"]):
-        return "analyze"
+        # Catch analysis/review queries — these need real file context
+        if any(k in text_lower for k in ["analyze", "explain", "list", "find", "show", "what",
+                                          "how", "why", "review", "check", "issues", "problems",
+                                          "tell me", "describe", "look at", "read"]):
+            return "analyze"
 
-    return "casual"
+        return "casual"
 
 
 # ── Memory Functions ───────────────────────────────────────────────────────────

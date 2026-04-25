@@ -276,19 +276,55 @@ class MLIntentClassifier:
         return list(self.KEYWORD_INTENTS.keys()) + [self.DEFAULT_INTENT]
 
 
-# Convenience function for quick intent detection
+# Unified keyword mappings from all deprecated classifiers
+GODOT_KEYWORDS = {
+    'debug': ['fix', 'bug', 'error', 'crash', 'issue', 'problem', 'broken', 
+              'wrong', 'fail', 'exception', 'traceback', 'debug', 'null', 'nil'],
+    'explain': ['explain', 'understand', 'what', 'how', 'why', 'concept', 
+                'theory', 'meaning', 'describe', 'tell me about', 'difference between'],
+    'create': ['create', 'make', 'generate', 'write', 'build', 'new', 
+               'implement', 'add', 'code', 'function', 'class', 'script', 'node'],
+    'optimize': ['optimize', 'improve', 'faster', 'performance', 'refactor', 
+                 'efficient', 'speed', 'memory', 'better', 'lag', 'slow'],
+    'search': ['find', 'search', 'look', 'locate', 'where', 'documentation', 
+               'reference', 'example', 'tutorial', 'show me'],
+    'chat': ['hello', 'hi', 'hey', 'thanks', 'thank you', 'goodbye', 'bye']
+}
+
+
+# Convenience function for quick intent detection - UNIFIED ENTRY POINT
 def classify_intent(query: str) -> str:
     """
     Quick intent classification without managing classifier instance.
+    
+    This is the SINGLE unified entry point for all intent classification.
+    Replaces: detect_intent_fast(), classify(), Cortex.classify_intent(), 
+              QueryRouter.route(), route_query() in all daemons.
     
     Args:
         query: User input text
         
     Returns:
-        Predicted intent string
+        Predicted intent string ('debug', 'explain', 'create', 'optimize', 'search', 'chat', 'general')
     """
     classifier = MLIntentClassifier()
     return classifier.predict(query)
+
+
+def detect_intent_fast(query: str) -> str:
+    """
+    Fast path intent detection using optimized keyword matching.
+    Deprecated: Use classify_intent() instead. This is kept for backward compatibility.
+    """
+    return classify_intent(query)
+
+
+def classify(text: str) -> str:
+    """
+    Legacy classify function from context_manager.py.
+    Deprecated: Use classify_intent() instead. This is kept for backward compatibility.
+    """
+    return classify_intent(text)
 
 
 if __name__ == "__main__":
