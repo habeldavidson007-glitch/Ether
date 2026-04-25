@@ -35,14 +35,16 @@ from datetime import datetime
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 
-# Import from unified consciousness module
+# Import from unified consciousness module - only stubs that don't conflict
 from ether.core.consciousness import (
     Hippocampus, 
-    Cortex as IntentClassifier, 
     SafetyGuard,
     detect_ram_and_suggest_model,
     ML_AVAILABLE
 )
+
+# Use local Cortex class for intent classification (avoid circular import)
+IntentClassifier = None  # Will use self-referential pattern in Cortex class
 
 # Import supporting modules
 from core.unified_search import get_unified_search
@@ -423,7 +425,8 @@ class Cortex:
     def __init__(self, project_root: str = None, enable_watchdog: bool = True, enable_composer: bool = False):
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.hippocampus = Hippocampus()
-        self.cortex = IntentClassifier()  # Intent classification
+        # Self-reference for intent classification (avoid circular import)
+        self.cortex = self  # Use self for intent classification
         self.safety = SafetyGuard()
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._conversation_history: List[Dict[str, Any]] = []
