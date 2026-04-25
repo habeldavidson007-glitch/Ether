@@ -612,6 +612,11 @@ def is_godot_related(query: str) -> bool:
     
     query_lower = query.lower()
     
+    # CRITICAL: Always allow greetings (check BEFORE non-Godot topics)
+    fast_intent = detect_intent_fast(query)
+    if fast_intent == 'greeting':
+        return True
+    
     # Check for non-Godot topics first (explicit rejection)
     for topic in NON_GODOT_TOPICS:
         if topic in query_lower:
