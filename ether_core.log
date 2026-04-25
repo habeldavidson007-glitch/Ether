@@ -1,8 +1,0 @@
-2026-04-22 16:28:53,510 - EtherCore - INFO - Registered service: knowledge_daemon
-2026-04-22 16:28:53,510 - EtherCore - INFO - Registered service: rag_indexer
-2026-04-22 16:28:53,510 - EtherCore - INFO - Registered service: memory_core
-2026-04-22 16:28:53,510 - EtherCore - INFO - Created default configuration at ether_core_config.json
-2026-04-22 16:29:25,073 - EtherCore - INFO - Registered service: knowledge_daemon
-2026-04-22 16:29:25,073 - EtherCore - INFO - Registered service: rag_indexer
-2026-04-22 16:29:25,073 - EtherCore - INFO - Registered service: memory_core
-2026-04-22 16:29:25,073 - EtherCore - INFO - Loaded configuration from ether_core_config.json
