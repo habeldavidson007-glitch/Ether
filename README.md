@@ -185,7 +185,8 @@ ether/
 
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute to Ether
 - [Changelog](CHANGELOG.md) - Version history and changes
-- [Stabilization Roadmap](STABILIZATION_ROADMAP.md) - Development roadmap
+- [CLI Guide](README_CLI.md) - Command line interface usage and examples
+- [Tests README](tests/README.md) - Test layout and execution notes
 
 ## 🤝 Contributing
 

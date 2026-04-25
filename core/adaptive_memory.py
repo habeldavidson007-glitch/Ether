@@ -24,8 +24,11 @@ from collections import defaultdict
 from datetime import datetime
 import gc
 import numpy as np
-import zstandard as zstd
-ZSTD_AVAILABLE = True
+import importlib
+
+_zstd_spec = importlib.util.find_spec("zstandard")
+ZSTD_AVAILABLE = _zstd_spec is not None
+zstd = importlib.import_module("zstandard") if ZSTD_AVAILABLE else None
 
 class FeedbackEntry:
     def __init__(self, entry_id: str, query: str, original_code: str, 
