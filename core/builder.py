@@ -2046,8 +2046,12 @@ class EtherBrain:
                 try:
                     from core.godot_validator import GodotValidator
                     self.godot_validator = GodotValidator()
-                except Exception as e:
-                    pass  # Optional feature, continue if it fails
+                except ImportError:
+                    try:
+                        from ether.godot.gdscript_analyzer import GDScriptAnalyzer
+                        self.godot_validator = GDScriptAnalyzer()
+                    except ImportError:
+                        pass  # Optional feature, continue if it fails
                 
                 # NEW: Initialize scene graph analyzer (Step 3)
                 try:
@@ -2249,7 +2253,11 @@ class EtherBrain:
                     # Step 1: Run static analyzer first (instant, no LLM)
                     static_report = ""
                     if self.project_loader and hasattr(self.project_loader, '_base_path') and self.project_loader._base_path:
-                        from core.static_analyzer import StaticAnalyzer
+                        try:
+                            from core.static_analyzer import StaticAnalyzer
+                        except ImportError:
+                            from ether.godot.gdscript_analyzer import GDScriptAnalyzer
+                            StaticAnalyzer = GDScriptAnalyzer
                         analyzer = StaticAnalyzer()
                         # Disable auto-fix during analysis mode to prevent unwanted modifications
                         import os
@@ -2287,7 +2295,11 @@ class EtherBrain:
                 analysis = None
                 if task['target'] and self.project_loader:
                     try:
-                        from core.static_analyzer import StaticAnalyzer
+                        try:
+                            from core.static_analyzer import StaticAnalyzer
+                        except ImportError:
+                            from ether.godot.gdscript_analyzer import GDScriptAnalyzer
+                            StaticAnalyzer = GDScriptAnalyzer
                         analyzer = StaticAnalyzer()
                         # Analyze ONLY the target file, not entire project
                         analysis = analyzer.analyze_file(task['target'])

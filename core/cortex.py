@@ -426,7 +426,7 @@ class Cortex:
         self.cortex = IntentClassifier()  # Intent classification
         self.safety = SafetyGuard()
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.conversation_history: List[Dict[str, Any]] = []
+        self._conversation_history: List[Dict[str, Any]] = []
         
         # Lazy-loaded components
         self._search_engine = None
@@ -441,7 +441,6 @@ class Cortex:
         self.watchdog = WatchdogMonitor() if enable_watchdog else None
         if self.watchdog:
             self.watchdog.register_callback(self._on_watchdog_event)
-        
         
         # Compositional architecture (musical measure engine) - DISABLED BY DEFAULT
         # Enable only for social/creative queries (~20% of use cases)
@@ -462,6 +461,28 @@ class Cortex:
         self.available_ram_gb = available_ram
         
         logger.info(f"Cortex initialized with Benchmark Enhancement Modules (Session: {self.session_id}, Model: {suggested_model})")
+    
+    @property
+    def conversation_history(self) -> List[Dict[str, Any]]:
+        """Get conversation history."""
+        return self._conversation_history
+    
+    @conversation_history.setter
+    def conversation_history(self, value: List[Dict[str, Any]]):
+        """Set conversation history with automatic bounding to 20 entries."""
+        self._conversation_history = value[-20:] if len(value) > 20 else value
+    
+    def _append_to_history(self, entry: Dict[str, Any]):
+        """Append to conversation history with automatic bounding to 20 entries."""
+        self._conversation_history.append(entry)
+        if len(self._conversation_history) > 20:
+            self._conversation_history = self._conversation_history[-20:]
+    
+    def add_to_history(self, entry: Dict[str, Any]):
+        """Public method to append to conversation history with automatic bounding to 20 entries."""
+        self._conversation_history.append(entry)
+        if len(self._conversation_history) > 20:
+            self._conversation_history = self._conversation_history[-20:]
     
     def _on_watchdog_event(self, event: str, data: Any):
         """Handle watchdog health events"""
@@ -496,6 +517,12 @@ class Cortex:
             True if query is Godot-related, False otherwise
         """
         query_lower = query.lower()
+        
+        # Tier 0: Greetings and common chat are always allowed (fast path)
+        GREETINGS = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", 
+                     "howdy", "greetings", "yo", "sup", "whats up"}
+        if query_lower.strip() in GREETINGS or query_lower.startswith(("hi ", "hello ", "hey ", "good morning", "good afternoon", "good evening")):
+            return True
         
         # Tier 1: Keyword heuristic check (fast path)
         GODOT_KEYWORDS = {

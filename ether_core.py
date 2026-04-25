@@ -92,8 +92,8 @@ class EtherCore:
         
         default_services = [
             {
-                'name': 'knowledge_daemon',
-                'script': str(base_dir / 'courier' / 'daemon.py'),
+                'name': 'unified_daemon',
+                'script': str(base_dir / 'ether' / 'core' / 'unified_daemon.py'),
                 'args': ['--interval', '3600'],
                 'auto_restart': True,
                 'cpu_limit': 20.0,
