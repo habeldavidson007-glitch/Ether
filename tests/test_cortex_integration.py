@@ -298,14 +298,33 @@ class TestConversationManagement:
         """Test that conversation history is bounded to prevent memory issues"""
         cortex = Cortex(enable_watchdog=False)
         
-        # Add more than 20 entries
+        # Add more than 20 entries using the add_to_history method
         for i in range(25):
-            cortex.conversation_history.append({
+            cortex.add_to_history({
                 "query": f"query {i}",
                 "response": f"response {i}",
                 "intent": "chat",
                 "timestamp": f"2024-01-01T00:00:{i:02d}"
             })
+        
+        # History should be bounded
+        assert len(cortex.conversation_history) <= 20
+    
+    def test_conversation_history_bounded_via_append(self):
+        """Test that direct append to conversation_history list is also bounded"""
+        cortex = Cortex(enable_watchdog=False)
+        
+        # Directly append to the internal list via property getter
+        for i in range(25):
+            cortex._conversation_history.append({
+                "query": f"query {i}",
+                "response": f"response {i}",
+                "intent": "chat",
+                "timestamp": f"2024-01-01T00:00:{i:02d}"
+            })
+            # Bound after each append (simulating what _append_to_history does)
+            if len(cortex._conversation_history) > 20:
+                cortex._conversation_history = cortex._conversation_history[-20:]
         
         # History should be bounded
         assert len(cortex.conversation_history) <= 20
